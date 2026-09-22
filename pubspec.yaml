@@ -58,10 +58,6 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  assets:
-    - assets/reference/reference_empty_groove.json
-    - assets/reference/reference_welded_groove.json
-
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
 

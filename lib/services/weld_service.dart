@@ -78,5 +78,20 @@ class WeldService {
     }
   }
 
+  /// Fetches the real empty-groove scan, rasterized by weld_service from
+  /// the source PLY point cloud (see fluid's src/bin/weld_service/reference.rs).
+  Future<Heightmap> fetchEmptyGrooveReference() => _fetchReference('/reference/empty-groove');
+
+  /// Fetches the real post-tack-weld scan (ground truth), same source.
+  Future<Heightmap> fetchWeldedGrooveReference() => _fetchReference('/reference/welded-groove');
+
+  Future<Heightmap> _fetchReference(String path) async {
+    final resp = await _client.get(baseUri.resolve(path));
+    if (resp.statusCode != 200) {
+      throw WeldServiceException('Failed to fetch $path: HTTP ${resp.statusCode} ${resp.body}');
+    }
+    return Heightmap.fromJsonString(resp.body);
+  }
+
   void dispose() => _client.close();
 }

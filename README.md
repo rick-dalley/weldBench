@@ -25,20 +25,32 @@ shop practice.
 
 ## Data provenance
 
-`assets/reference/reference_empty_groove.json` and
-`reference_welded_groove.json` are rasterized (300x300 grid) from real
-laser-profilometer point-cloud scans (`Transformer/data/no-tack-V-groove.ply`
-and `tack-V-groove.ply`), windowed to a single tack weld at
-Y = 185-215mm along the groove. See the heightmap JSON format in
-`lib/models/heightmap.dart`.
+The two reference panels come from real laser-profilometer point-cloud
+scans (`Transformer/data/no-tack-V-groove.ply` and `tack-V-groove.ply`),
+windowed to a single tack weld at Y = 185-215mm along the groove, and
+rasterized to a 300x300 grid. That rasterization happens live in
+`weld_service` (see `fluid/src/bin/weld_service/reference.rs`) — this app
+fetches it over HTTP rather than bundling a pre-baked copy, so there's one
+authoritative code path for turning the raw scans into a heightmap.
 
-## Backend contract
+## Backend: started automatically
 
 This app talks to a local HTTP/JSON service (default
-`http://localhost:8787`) documented in `lib/services/weld_service.dart`:
-`POST /runs` to start a simulation, `GET /runs/{id}` to poll status, and
-`GET /runs/{id}/heightmap` to fetch the result once done. That service
-lives in the [`fluid`](https://github.com/rick-dalley/fluid) repo.
+`http://localhost:8787`), documented in `lib/services/weld_service.dart`:
+`POST /runs` to start a simulation, `GET /runs/{id}` to poll status,
+`GET /runs/{id}/heightmap` for the result, and `GET /reference/*` for the
+two real reference scans. That service lives in the
+[`fluid`](https://github.com/rick-dalley/fluid) repo, as `weld_service`.
+
+You don't need to start it yourself: on launch, `lib/services/service_launcher.dart`
+checks whether something is already listening on port 8787 and reuses it if
+so; otherwise it spawns `cargo run --bin weld_service` from a sibling `fluid`
+checkout (`../fluid` relative to this repo by default, override with the
+`WELD_SERVICE_DIR` environment variable) and waits for it to come up. If
+weldBench started it, it stops it again on window close; if it found an
+already-running instance, it leaves it alone. First launch takes a bit
+longer (~15s) while the two real point-cloud scans are parsed; the app shows
+a startup screen with status text while this happens.
 
 ## Related repos
 

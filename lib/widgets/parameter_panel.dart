@@ -116,6 +116,14 @@ class ParameterPanel extends StatelessWidget {
               onChanged();
             },
           ),
+          if (lever.extraHint != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                lever.extraHint!(params),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+              ),
+            ),
         ],
       ),
     );

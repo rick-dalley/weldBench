@@ -85,6 +85,10 @@ class LeverSpec {
   final double Function(WeldParameters) get;
   final void Function(WeldParameters, double) set;
 
+  /// Optional small line of extra context shown under the slider (e.g. a
+  /// derived value the user should know but that isn't itself a lever).
+  final String Function(WeldParameters)? extraHint;
+
   const LeverSpec({
     required this.label,
     required this.unit,
@@ -93,6 +97,7 @@ class LeverSpec {
     required this.modeled,
     required this.get,
     required this.set,
+    this.extraHint,
   });
 }
 
@@ -199,13 +204,20 @@ final List<MapEntry<String, List<LeverSpec>>> leverGroups = [
   ]),
   MapEntry('Weld window', [
     LeverSpec(
-      label: 'Weld duration',
+      label: 'Arc-on time',
       unit: 'ms',
       min: 50,
       max: 1000,
       modeled: true,
       get: (p) => p.weldDurationMs,
       set: (p, v) => p.weldDurationMs = v,
+      // weld_service treats this as the arc-on dwell ("tshift"), then runs
+      // for END_TIME_MULTIPLE_OF_DWELL (currently 3x, see fluid's
+      // src/bin/weld_service/mapping.rs::estimate_timing) beyond it -- a
+      // ramp-down plus a cooldown tail, so the pool actually finishes
+      // solidifying before the run ends. The total simulated (and thus
+      // wall-clock) time is that multiple, not this slider's raw value.
+      extraHint: (p) => 'total simulated: ~${(p.weldDurationMs * 3).round()}ms (incl. ramp-down + cooldown)',
     ),
   ]),
 ];

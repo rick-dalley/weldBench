@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import 'models/heightmap.dart';
 import 'models/run_progress.dart';
@@ -341,11 +342,37 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                 if (_errorText != null)
                   Container(
                     width: double.infinity,
+                    constraints: const BoxConstraints(maxHeight: 220),
                     color: Colors.red.shade50,
                     padding: const EdgeInsets.all(8),
-                    child: Text(
-                      _errorText!,
-                      style: TextStyle(color: Colors.red.shade900),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Run failed',
+                                style: TextStyle(color: Colors.red.shade900, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.copy, size: 18),
+                              tooltip: 'Copy error to clipboard',
+                              color: Colors.red.shade900,
+                              onPressed: () => Clipboard.setData(ClipboardData(text: _errorText!)),
+                            ),
+                          ],
+                        ),
+                        Expanded(
+                          child: SingleChildScrollView(
+                            child: SelectableText(
+                              _errorText!,
+                              style: TextStyle(color: Colors.red.shade900, fontFamily: 'monospace', fontSize: 12),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 Expanded(

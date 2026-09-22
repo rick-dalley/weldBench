@@ -3,11 +3,13 @@ import 'dart:ui' show AppExitResponse;
 import 'package:flutter/material.dart';
 
 import 'models/heightmap.dart';
+import 'models/run_progress.dart';
 import 'models/weld_parameters.dart';
 import 'services/service_launcher.dart';
 import 'services/weld_service.dart';
 import 'widgets/heightmap_view.dart';
 import 'widgets/parameter_panel.dart';
+import 'widgets/stage_timeline.dart';
 
 void main() {
   runApp(const WeldBenchApp());
@@ -145,8 +147,10 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
 
   Heightmap? _simulated;
   bool _running = false;
-  String? _statusText;
   String? _errorText;
+  List<StageRecord> _stages = [];
+  SolveProgress? _solveProgress;
+  HeightmapColormap _colormap = HeightmapColormap.viridis;
 
   @override
   void initState() {
@@ -168,15 +172,19 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
   Future<void> _runWeld() async {
     setState(() {
       _running = true;
-      _statusText = 'starting...';
       _errorText = null;
+      _stages = [];
+      _solveProgress = null;
     });
     try {
       final result = await widget.weldService.runWeld(
         _params,
-        onStatus: (status) {
+        onProgress: (update) {
           if (!mounted) return;
-          setState(() => _statusText = status);
+          setState(() {
+            _stages = update.stages;
+            _solveProgress = update.solveProgress;
+          });
         },
       );
       if (!mounted) return;
@@ -213,6 +221,19 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
         title: const Text('weldBench'),
         actions: [
           Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Center(
+              child: SegmentedButton<HeightmapColormap>(
+                segments: const [
+                  ButtonSegment(value: HeightmapColormap.viridis, label: Text('Viridis')),
+                  ButtonSegment(value: HeightmapColormap.grayscale, label: Text('Grayscale')),
+                ],
+                selected: {_colormap},
+                onSelectionChanged: (s) => setState(() => _colormap = s.first),
+              ),
+            ),
+          ),
+          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Center(
               child: FilledButton.icon(
@@ -237,6 +258,7 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
           Expanded(
             child: Column(
               children: [
+                if (_stages.isNotEmpty) StageTimeline(stages: _stages, solveProgress: _solveProgress),
                 if (_errorText != null)
                   Container(
                     width: double.infinity,
@@ -256,6 +278,7 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                           child: HeightmapView(
                             title: 'Empty groove (no-tack scan)',
                             heightmap: widget.emptyGroove,
+                            colormap: _colormap,
                             zMinOverride: refZMin,
                             zMaxOverride: refZMax,
                           ),
@@ -265,6 +288,7 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                           child: HeightmapView(
                             title: 'Real weld (tack scan, ground truth)',
                             heightmap: widget.weldedGroove,
+                            colormap: _colormap,
                             zMinOverride: refZMin,
                             zMaxOverride: refZMax,
                           ),
@@ -274,8 +298,8 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                           child: HeightmapView(
                             title: 'ferrousFoam prediction',
                             heightmap: _simulated,
+                            colormap: _colormap,
                             loading: _running,
-                            statusText: _statusText,
                           ),
                         ),
                       ],

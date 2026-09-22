@@ -5,6 +5,16 @@ import 'package:flutter/material.dart';
 
 import '../models/heightmap.dart';
 
+enum HeightmapColormap {
+  viridis,
+  grayscale;
+
+  String get label => switch (this) {
+        HeightmapColormap.viridis => 'Viridis',
+        HeightmapColormap.grayscale => 'Grayscale',
+      };
+}
+
 /// A handful of control points approximating the viridis colormap, so
 /// heightmap panels here read consistently with the matplotlib previews
 /// used to validate the underlying data.
@@ -24,19 +34,39 @@ Color _viridis(double t) {
   return Color.lerp(_viridisStops[i], _viridisStops[i + 1], frac)!;
 }
 
+// Dark grey (low/deep) to off-white (high/flat surface) -- not pure black
+// or pure white at either end, so the very top and bottom of the range
+// still read as distinct shades rather than clipping to a flat color.
+const Color _grayscaleLow = Color(0xFF2A2A2A);
+const Color _grayscaleHigh = Color(0xFFF5F3EE);
+
+Color _grayscale(double t) => Color.lerp(_grayscaleLow, _grayscaleHigh, t.clamp(0.0, 1.0))!;
+
+Color Function(double) _colormapFunction(HeightmapColormap colormap) => switch (colormap) {
+      HeightmapColormap.viridis => _viridis,
+      HeightmapColormap.grayscale => _grayscale,
+    };
+
 /// Rasterizes a [Heightmap] into a [ui.Image] (one pixel per grid cell,
-/// viridis-colored), for GPU-cheap scaled display via [Canvas.drawImageRect].
-Future<ui.Image> _heightmapToImage(Heightmap hm, {required double zMin, required double zMax}) {
+/// colored per [colormap]), for GPU-cheap scaled display via
+/// [Canvas.drawImageRect].
+Future<ui.Image> _heightmapToImage(
+  Heightmap hm, {
+  required double zMin,
+  required double zMax,
+  required HeightmapColormap colormap,
+}) {
   final nx = hm.nx;
   final ny = hm.ny;
   final range = (zMax - zMin).abs() < 1e-9 ? 1.0 : (zMax - zMin);
+  final colorOf = _colormapFunction(colormap);
 
   final pixels = Uint8List(nx * ny * 4); // RGBA
   for (var xi = 0; xi < nx; xi++) {
     for (var yi = 0; yi < ny; yi++) {
       final z = hm.zMm[xi][yi];
       final t = (z - zMin) / range;
-      final c = _viridis(t);
+      final c = colorOf(t);
       // Flip Y so larger Y (further along the weld) renders toward the top.
       final row = ny - 1 - yi;
       final idx = (row * nx + xi) * 4;
@@ -63,6 +93,7 @@ class HeightmapView extends StatefulWidget {
   final Heightmap? heightmap;
   final bool loading;
   final String? statusText;
+  final HeightmapColormap colormap;
 
   /// Shared z-range across panels, so color scales line up when comparing.
   /// If null, uses this heightmap's own min/max.
@@ -75,6 +106,7 @@ class HeightmapView extends StatefulWidget {
     required this.heightmap,
     this.loading = false,
     this.statusText,
+    this.colormap = HeightmapColormap.viridis,
     this.zMinOverride,
     this.zMaxOverride,
   });
@@ -86,6 +118,7 @@ class HeightmapView extends StatefulWidget {
 class _HeightmapViewState extends State<HeightmapView> {
   ui.Image? _image;
   Heightmap? _imageForHeightmap;
+  HeightmapColormap? _imageForColormap;
 
   @override
   void didUpdateWidget(covariant HeightmapView oldWidget) {
@@ -101,11 +134,13 @@ class _HeightmapViewState extends State<HeightmapView> {
 
   void _maybeRebuildImage() {
     final hm = widget.heightmap;
-    if (hm == null || identical(hm, _imageForHeightmap)) return;
+    if (hm == null) return;
+    if (identical(hm, _imageForHeightmap) && widget.colormap == _imageForColormap) return;
     _imageForHeightmap = hm;
+    _imageForColormap = widget.colormap;
     final zMin = widget.zMinOverride ?? hm.zMin;
     final zMax = widget.zMaxOverride ?? hm.zMax;
-    _heightmapToImage(hm, zMin: zMin, zMax: zMax).then((img) {
+    _heightmapToImage(hm, zMin: zMin, zMax: zMax, colormap: widget.colormap).then((img) {
       if (!mounted) return;
       setState(() => _image = img);
     });

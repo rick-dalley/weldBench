@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/heightmap.dart';
+import '../models/run_progress.dart';
 import '../models/weld_parameters.dart';
 
 /// Client for the local Rust orchestration service that runs ferrousFoam and
@@ -11,7 +12,9 @@ import '../models/weld_parameters.dart';
 /// API contract (local HTTP/JSON, default http://localhost:8787):
 ///   POST /runs                    body: WeldParameters.toJson()
 ///                                  -> {"run_id": "..."}
-///   GET  /runs/{run_id}           -> {"status": "running"|"done"|"failed", "error": "..."?}
+///   GET  /runs/{run_id}           -> RunStatusUpdate JSON (status, stage
+///                                    timeline, live solve progress -- see
+///                                    models/run_progress.dart)
 ///   GET  /runs/{run_id}/heightmap -> Heightmap JSON (same shape as the
 ///                                    bundled reference assets)
 class WeldServiceException implements Exception {
@@ -30,12 +33,19 @@ class WeldService {
         _client = client ?? http.Client();
 
   /// Starts a run, polls until it's done, and returns the resulting
-  /// heightmap. Calls [onStatus] with each observed status while polling.
+  /// heightmap. Calls [onProgress] with each observed status (including the
+  /// stage timeline and live solve progress) while polling.
   Future<Heightmap> runWeld(
     WeldParameters params, {
-    void Function(String status)? onStatus,
+    void Function(RunStatusUpdate progress)? onProgress,
     Duration pollInterval = const Duration(milliseconds: 750),
-    Duration timeout = const Duration(minutes: 10),
+    // At the current RealGrooveCase mesh resolution, a full-length (250ms)
+    // weld takes on the order of 35-40 minutes wall-clock, and the
+    // weld_duration_ms lever goes up to 1000ms (~4x that). 3 hours gives
+    // generous headroom without being effectively unbounded; this is a
+    // safety backstop, not an expected wait -- the stage timeline is what
+    // tells you how it's actually progressing.
+    Duration timeout = const Duration(hours: 3),
   }) async {
     final startResp = await _client.post(
       baseUri.resolve('/runs'),
@@ -58,20 +68,18 @@ class WeldService {
         throw WeldServiceException(
             'Failed to poll run $runId: HTTP ${statusResp.statusCode}');
       }
-      final statusJson = jsonDecode(statusResp.body) as Map<String, dynamic>;
-      final status = statusJson['status'] as String;
-      onStatus?.call(status);
+      final update = RunStatusUpdate.fromJson(jsonDecode(statusResp.body) as Map<String, dynamic>);
+      onProgress?.call(update);
 
-      if (status == 'done') {
+      if (update.status == 'done') {
         final resultResp = await _client.get(baseUri.resolve('/runs/$runId/heightmap'));
         if (resultResp.statusCode != 200) {
           throw WeldServiceException(
               'Failed to fetch result for run $runId: HTTP ${resultResp.statusCode}');
         }
         return Heightmap.fromJsonString(resultResp.body);
-      } else if (status == 'failed') {
-        final err = statusJson['error'] as String? ?? 'unknown error';
-        throw WeldServiceException('Run $runId failed: $err');
+      } else if (update.status == 'failed') {
+        throw WeldServiceException('Run $runId failed: ${update.error ?? 'unknown error'}');
       }
 
       await Future.delayed(pollInterval);

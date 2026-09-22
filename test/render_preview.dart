@@ -6,7 +6,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:weld_bench/main.dart';
 import 'package:weld_bench/models/heightmap.dart';
+import 'package:weld_bench/services/fast_service_launcher.dart';
 import 'package:weld_bench/services/service_launcher.dart';
+import 'package:weld_bench/services/weld_fast_service.dart';
 import 'package:weld_bench/services/weld_service.dart';
 
 // A small synthetic V-groove-like heightmap: high plate surface at the
@@ -38,6 +40,8 @@ void main() {
             home: WeldBenchHome(
               launcher: ServiceLauncher(),
               weldService: WeldService(),
+              fastLauncher: FastServiceLauncher(),
+              fastWeldService: WeldFastService(),
               emptyGroove: _syntheticGroove(),
               weldedGroove: _syntheticGroove(bump: 3),
             ),

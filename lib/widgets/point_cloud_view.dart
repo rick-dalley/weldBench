@@ -36,6 +36,11 @@ class AdaptiveHeightmapView extends StatelessWidget {
   /// tapping a panel is a no-op the rest of the time.
   final void Function(double xMm, double yMm)? onPointPicked;
 
+  /// Forwarded to [PointCloudView] (ignored in flat 2D mode, which has no
+  /// notion of an occluding wall to open up) -- see its own doc comment.
+  /// Only ever true for the two real profilometer-scan panels.
+  final bool showBackingPlate;
+
   const AdaptiveHeightmapView({
     super.key,
     required this.title,
@@ -47,6 +52,7 @@ class AdaptiveHeightmapView extends StatelessWidget {
     this.zMinOverride,
     this.zMaxOverride,
     this.onPointPicked,
+    this.showBackingPlate = false,
   });
 
   @override
@@ -70,6 +76,7 @@ class AdaptiveHeightmapView extends StatelessWidget {
           zMinOverride: zMinOverride,
           zMaxOverride: zMaxOverride,
           onPointPicked: onPointPicked,
+          showBackingPlate: showBackingPlate,
         ),
     };
   }
@@ -112,6 +119,22 @@ class PointCloudView extends StatefulWidget {
   /// surprising.
   final void Function(double xMm, double yMm)? onPointPicked;
 
+  /// Only meaningful for the real profilometer scans, not a predicted
+  /// (ferrousFoam/fast-model) surface: the raw scan's deepest points, right
+  /// at the groove center, are the laser seeing through the narrow root gap
+  /// between the two beveled plates down to the flat backing table beneath
+  /// them -- not a continuation of the V. Rendered naively (as literally
+  /// just more heightfield), that reads as a small, confusing square notch.
+  /// When true, that narrow notch is detected per-row and rendered instead
+  /// as an actual opening in the V walls, with a separate flat table
+  /// surface spanning the full groove width beneath it (fading out at the
+  /// left/right edges, since the real table plausibly continues beyond
+  /// what's shown) -- see _PointCloudPainter's gap-detection logic. Left
+  /// false (the default) for predicted surfaces, which have no such
+  /// artifact and would just get a spurious hole carved out of a smooth V
+  /// if this ran on them.
+  final bool showBackingPlate;
+
   const PointCloudView({
     super.key,
     required this.title,
@@ -124,6 +147,7 @@ class PointCloudView extends StatefulWidget {
     this.initialAzimuth = -0.5,
     this.initialElevation = 0.5,
     this.onPointPicked,
+    this.showBackingPlate = false,
   });
 
   @override
@@ -217,6 +241,7 @@ class _PointCloudViewState extends State<PointCloudView> {
                                   azimuth: _azimuth,
                                   elevation: _elevation,
                                   zExaggeration: widget.zExaggeration,
+                                  showBackingPlate: widget.showBackingPlate,
                                 ),
                                 child: Container(),
                               ),
@@ -261,7 +286,12 @@ class _Quad {
   final _Projected a, b, c, d;
   final double depth;
   final Color color;
-  _Quad(this.a, this.b, this.c, this.d, this.depth, this.color);
+  // 1.0 for an ordinary surface quad. Less than 1.0 only for backing-table
+  // quads near the domain's X edges, so the table visually "trails off"
+  // there instead of ending in a hard edge -- see
+  // _PointCloudPainter._buildBackingPlateQuads.
+  final double alpha;
+  _Quad(this.a, this.b, this.c, this.d, this.depth, this.color, {this.alpha = 1.0});
 }
 
 /// A rotated-then-orthographically-projected 3D point: [x] and [y] are
@@ -375,6 +405,7 @@ class _PointCloudPainter extends CustomPainter {
   final double azimuth;
   final double elevation;
   final double zExaggeration;
+  final bool showBackingPlate;
 
   _PointCloudPainter({
     required this.heightmap,
@@ -384,7 +415,47 @@ class _PointCloudPainter extends CustomPainter {
     required this.azimuth,
     required this.elevation,
     required this.zExaggeration,
+    this.showBackingPlate = false,
   });
+
+  // How far above a row's own minimum Z counts as still "the narrow root-
+  // gap notch" rather than "the general V-groove floor" -- the notch is a
+  // small, sharp additional dip right at the groove center, distinct from
+  // (and deeper than) the broader V shape around it. Picked empirically
+  // against the real RealGrooveCase scan geometry (root gap ~4.3mm, notch
+  // depth relative to the surrounding floor on the order of 1-2mm); a
+  // heightmap without this feature (predicted panels never reach this code
+  // path at all, gated by showBackingPlate) wouldn't be affected either way.
+  static const double _gapDetectionToleranceMm = 1.2;
+
+  /// The raw X-range (in mm) of the row's narrow root-gap notch, isolated
+  /// from the broader V-shaped floor around it by looking only at points
+  /// within [_gapDetectionToleranceMm] of the row's minimum. The notch is a
+  /// real, physical feature of the root gap itself (present the full length
+  /// of the groove, not just where a tack weld happens to sit), so this is
+  /// expected to find something on every row of a real scan.
+  ({double xLoMm, double xHiMm}) _detectGapXRangeMm(int yi) {
+    final nx = heightmap.nx;
+    var minZ = double.infinity;
+    var minXi = 0;
+    for (var xi = 0; xi < nx; xi++) {
+      final z = heightmap.zMm[xi][yi];
+      if (z < minZ) {
+        minZ = z;
+        minXi = xi;
+      }
+    }
+    final threshold = minZ + _gapDetectionToleranceMm;
+    var loXi = minXi;
+    while (loXi > 0 && heightmap.zMm[loXi - 1][yi] <= threshold) {
+      loXi--;
+    }
+    var hiXi = minXi;
+    while (hiXi < nx - 1 && heightmap.zMm[hiXi + 1][yi] <= threshold) {
+      hiXi++;
+    }
+    return (xLoMm: heightmap.xMm[loXi], xHiMm: heightmap.xMm[hiXi]);
+  }
 
   // Cap the rendered mesh resolution for interactive-rate dragging --
   // decimating a 300x300 grid down to at most ~70 per axis is still plenty
@@ -441,14 +512,42 @@ class _PointCloudPainter extends CustomPainter {
       }),
     );
 
+    // The real scan's narrow root-gap notch, per decimated row -- null
+    // entries mean "no gap detected on this row" (shouldn't normally happen
+    // on a real scan, but guards against a degenerate/empty heightmap).
+    // Only computed when showBackingPlate is set, since this is meaningless
+    // (and wasted work) for a predicted surface.
+    final gapRangesByRow = showBackingPlate
+        ? [for (final yi in yIndices) _detectGapXRangeMm(yi)]
+        : null;
+
+    bool cellIsInGap(int xpi, int ypi) {
+      if (gapRangesByRow == null) return false;
+      final xLo = heightmap.xMm[xIndices[xpi]];
+      final xHi = heightmap.xMm[xIndices[xpi + 1]];
+      // Require BOTH bounding rows to independently agree this column
+      // range is inside their own gap -- conservative, so a single noisy
+      // row doesn't punch an isolated hole in the wall.
+      for (final ypiToCheck in [ypi, ypi + 1]) {
+        final g = gapRangesByRow[ypiToCheck];
+        if (xLo < g.xLoMm || xHi > g.xHiMm) return false;
+      }
+      return true;
+    }
+
     // Build one filled quad per grid cell (4 shared corners), rather than
     // disconnected points -- a surface has real occlusion (a near ridge
     // hides whatever's behind it), which is what actually makes rotating to
     // an edge-on angle read as a clean cross-section instead of every Y
-    // value's points all showing through on top of each other.
+    // value's points all showing through on top of each other. Cells fully
+    // inside the detected root-gap notch are skipped entirely -- a real
+    // opening, not surface -- so the separate backing-plate quads built
+    // below are actually visible through it rather than just being drawn
+    // behind an unbroken wall.
     final quads = <_Quad>[];
     for (var xpi = 0; xpi < xIndices.length - 1; xpi++) {
       for (var ypi = 0; ypi < yIndices.length - 1; ypi++) {
+        if (cellIsInGap(xpi, ypi)) continue;
         final a = proj[xpi][ypi];
         final b = proj[xpi + 1][ypi];
         final c = proj[xpi + 1][ypi + 1];
@@ -461,6 +560,19 @@ class _PointCloudPainter extends CustomPainter {
         final avgColor = Color.lerp(Color.lerp(a.color, b.color, 0.5), Color.lerp(c.color, d.color, 0.5), 0.5)!;
         quads.add(_Quad(a, b, c, d, avgDepth, avgColor));
       }
+    }
+
+    if (showBackingPlate) {
+      quads.addAll(_buildBackingPlateQuads(
+        xIndices: xIndices,
+        yIndices: yIndices,
+        xMid: xMid,
+        yMid: yMid,
+        zMid: zMid,
+        zRange: zRange,
+        baseScale: baseScale,
+        colorOf: colorOf,
+      ));
     }
 
     // Painter's algorithm: draw far-to-near so nearer geometry correctly
@@ -480,18 +592,86 @@ class _PointCloudPainter extends CustomPainter {
         ..lineTo(sc.dx, sc.dy)
         ..lineTo(sd.dx, sd.dy)
         ..close();
-      canvas.drawPath(path, Paint()..color = q.color);
+      final fillColor = q.alpha >= 1.0 ? q.color : q.color.withValues(alpha: q.color.a * q.alpha);
+      canvas.drawPath(path, Paint()..color = fillColor);
       // A thin matching-but-darker edge keeps individual cells faintly
       // legible as a surface (grid lines) rather than a flat color blob,
       // without the harsh look of a contrasting wireframe color.
       canvas.drawPath(
         path,
         Paint()
-          ..color = q.color.withValues(alpha: 0.25)
+          ..color = fillColor.withValues(alpha: fillColor.a * 0.25)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.5,
       );
     }
+  }
+
+  /// A flat surface at the deepest Z the scan recorded anywhere (the most
+  /// plausible reading of the backing table, glimpsed only through the
+  /// narrow root gap) -- spanning the FULL X width of the groove (matching
+  /// the two top plates' outer edges, not just the gap itself), since the
+  /// real table plausibly extends at least that far either way. Its own
+  /// left/right edges fade toward transparent rather than ending in a hard
+  /// line, since the table almost certainly continues beyond what the scan
+  /// actually captured.
+  List<_Quad> _buildBackingPlateQuads({
+    required List<int> xIndices,
+    required List<int> yIndices,
+    required double xMid,
+    required double yMid,
+    required double zMid,
+    required double zRange,
+    required double baseScale,
+    required Color Function(double) colorOf,
+  }) {
+    var tableZ = double.infinity;
+    for (final row in heightmap.zMm) {
+      for (final z in row) {
+        if (z < tableZ) tableZ = z;
+      }
+    }
+    final cz = -(tableZ - zMid) / zRange * zExaggeration;
+    final t = ((tableZ - zMin) / zRange).clamp(0.0, 1.0);
+    final color = colorOf(t);
+
+    // Fraction of the domain width, at each end, over which the table
+    // fades from fully transparent (at the very edge) to fully opaque.
+    const fadeFraction = 0.15;
+    final xLoMm = heightmap.xMin;
+    final xHiMm = heightmap.xMax;
+    final span = (xHiMm - xLoMm).abs() < 1e-9 ? 1.0 : (xHiMm - xLoMm);
+    double edgeAlpha(double xMm) {
+      final tFromLo = (xMm - xLoMm) / span;
+      final distFromEdge = math.min(tFromLo, 1.0 - tFromLo);
+      return (distFromEdge / fadeFraction).clamp(0.0, 1.0);
+    }
+
+    _Projected project(double xMm, double yMm) {
+      final cx = (xMm - xMid) * baseScale;
+      final cy = (yMm - yMid) * baseScale;
+      final r = rotateAndProject(cx, cy, cz, azimuth: azimuth, elevation: elevation);
+      return _Projected(r.x, r.y, r.depth, color);
+    }
+
+    final quads = <_Quad>[];
+    for (var xpi = 0; xpi < xIndices.length - 1; xpi++) {
+      final xLo = heightmap.xMm[xIndices[xpi]];
+      final xHi = heightmap.xMm[xIndices[xpi + 1]];
+      final alpha = math.min(edgeAlpha(xLo), edgeAlpha(xHi));
+      if (alpha <= 0.0) continue;
+      for (var ypi = 0; ypi < yIndices.length - 1; ypi++) {
+        final yLo = heightmap.yMm[yIndices[ypi]];
+        final yHi = heightmap.yMm[yIndices[ypi + 1]];
+        final a = project(xLo, yLo);
+        final b = project(xHi, yLo);
+        final c = project(xHi, yHi);
+        final d = project(xLo, yHi);
+        final avgDepth = (a.depth + b.depth + c.depth + d.depth) / 4;
+        quads.add(_Quad(a, b, c, d, avgDepth, color, alpha: alpha));
+      }
+    }
+    return quads;
   }
 
   @override
@@ -502,6 +682,7 @@ class _PointCloudPainter extends CustomPainter {
         oldDelegate.colormap != colormap ||
         oldDelegate.azimuth != azimuth ||
         oldDelegate.elevation != elevation ||
-        oldDelegate.zExaggeration != zExaggeration;
+        oldDelegate.zExaggeration != zExaggeration ||
+        oldDelegate.showBackingPlate != showBackingPlate;
   }
 }

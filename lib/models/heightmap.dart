@@ -11,7 +11,16 @@ class Heightmap {
   final List<double> yMm;
   final List<List<double>> zMm; // zMm[xi][yi]
 
-  Heightmap({required this.xMm, required this.yMm, required this.zMm});
+  /// True for a finished result (the field is omitted by weld_service in
+  /// that case, so this defaults to true), false for a live mid-solve
+  /// snapshot written by case_runner's background snapshot thread while
+  /// ferrousFoam is still running (see fluid's api_types.rs). Not currently
+  /// used to change how a heightmap is rendered -- AdaptiveHeightmapView
+  /// draws both the same way -- just available for callers that want to
+  /// distinguish "final" from "still evolving".
+  final bool complete;
+
+  Heightmap({required this.xMm, required this.yMm, required this.zMm, this.complete = true});
 
   int get nx => xMm.length;
   int get ny => yMm.length;
@@ -48,6 +57,7 @@ class Heightmap {
       zMm: (json['z_mm'] as List)
           .map((row) => (row as List).map((e) => (e as num).toDouble()).toList())
           .toList(),
+      complete: json['complete'] as bool? ?? true,
     );
   }
 

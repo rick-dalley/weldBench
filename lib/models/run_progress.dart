@@ -42,8 +42,9 @@ class SolveProgress {
 }
 
 /// The full status payload from GET /runs/{id}: the plain status string
-/// (running/done/failed) plus the stage timeline, present on every status
-/// so the timeline stays visible (with final timings) after completion too.
+/// (running/done/failed/incomplete) plus the stage timeline, present on
+/// every status so the timeline stays visible (with final timings) after
+/// completion too.
 class RunStatusUpdate {
   final String status;
   final List<StageRecord> stages;
@@ -66,4 +67,42 @@ class RunStatusUpdate {
             json['solve_progress'] != null ? SolveProgress.fromJson(json['solve_progress'] as Map<String, dynamic>) : null,
         error: json['error'] as String?,
       );
+}
+
+/// One entry of GET /runs/incomplete (see fluid's src/bin/weld_service/
+/// main.rs and api_types.rs's IncompleteRunSummary) -- a run whose solving
+/// stage was left open by a process that went away mid-solve, discovered by
+/// weld_service on startup. `request` is kept as the raw JSON map (rather
+/// than parsed into WeldParameters) since it's only ever used here to show a
+/// short human-readable summary in the startup "resume or restart?" dialog,
+/// not fed back into the parameter panel.
+class IncompleteRun {
+  final String runId;
+  final double? latestTimeS;
+  final double? endTimeS;
+  final Map<String, dynamic>? request;
+
+  const IncompleteRun({
+    required this.runId,
+    this.latestTimeS,
+    this.endTimeS,
+    this.request,
+  });
+
+  factory IncompleteRun.fromJson(Map<String, dynamic> json) => IncompleteRun(
+        runId: json['run_id'] as String,
+        latestTimeS: (json['latest_time_s'] as num?)?.toDouble(),
+        endTimeS: (json['end_time_s'] as num?)?.toDouble(),
+        request: json['request'] as Map<String, dynamic>?,
+      );
+}
+
+/// What the user picked in the startup gate's incomplete-run dialog (see
+/// main.dart's _StartupGate) -- carried into WeldBenchHome so it can kick
+/// off the resume/restart the same way a fresh "Weld" button press would.
+class PendingRunAction {
+  final String runId;
+  final bool restart;
+
+  const PendingRunAction({required this.runId, required this.restart});
 }

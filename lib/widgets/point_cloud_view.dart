@@ -310,7 +310,12 @@ class _PointCloudPainter extends CustomPainter {
         final z = heightmap.zMm[xi][yi];
         final cx = (x - xMid) * baseScale;
         final cy = (y - yMid) * baseScale;
-        final cz = (z - zMid) / zRange * zExaggeration;
+        // Negated: higher physical height should move UP on screen (the
+        // universal convention for every terrain/elevation view), but
+        // rotateAndProject's screen-Y and the canvas's pixel-Y are both
+        // "larger value = higher up" internally -- without this flip the
+        // deep groove floor ends up rendered above the plate surface.
+        final cz = -(z - zMid) / zRange * zExaggeration;
         final r = rotateAndProject(cx, cy, cz, azimuth: azimuth, elevation: elevation);
         final t = ((z - zMin) / zRange).clamp(0.0, 1.0);
         return _Projected(r.x, r.y, r.depth, colorOf(t));

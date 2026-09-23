@@ -132,3 +132,63 @@ class PendingRunAction {
 
   const PendingRunAction({required this.runId, required this.kind});
 }
+
+/// One entry of GET /runs (see fluid's main.rs::list_run_history and
+/// api_types.rs's RunHistoryEntry) -- every weld run weld_service has ever
+/// staged, found by scanning its runs/ directory directly rather than
+/// relying on in-memory state, so this covers runs from before the current
+/// weld_service process even started. Backs the "past welds" dropdown.
+enum RunHistoryStatus {
+  running,
+  done,
+  incompleteResumable,
+  incompleteNotResumable;
+
+  static RunHistoryStatus fromWire(String s) => switch (s) {
+        'running' => RunHistoryStatus.running,
+        'done' => RunHistoryStatus.done,
+        'incomplete_resumable' => RunHistoryStatus.incompleteResumable,
+        'incomplete_not_resumable' => RunHistoryStatus.incompleteNotResumable,
+        _ => RunHistoryStatus.incompleteNotResumable,
+      };
+
+  String get label => switch (this) {
+        RunHistoryStatus.running => 'running',
+        RunHistoryStatus.done => 'done',
+        RunHistoryStatus.incompleteResumable => 'paused (resumable)',
+        RunHistoryStatus.incompleteNotResumable => 'incomplete',
+      };
+}
+
+class RunHistoryEntry {
+  final String runId;
+  final double? startedAtS;
+  final RunHistoryStatus status;
+  final double? latestTimeS;
+  final double? endTimeS;
+  final Map<String, dynamic>? request;
+  final bool hasHeightmap;
+
+  const RunHistoryEntry({
+    required this.runId,
+    this.startedAtS,
+    required this.status,
+    this.latestTimeS,
+    this.endTimeS,
+    this.request,
+    required this.hasHeightmap,
+  });
+
+  DateTime? get startedAt =>
+      startedAtS == null ? null : DateTime.fromMillisecondsSinceEpoch((startedAtS! * 1000).round());
+
+  factory RunHistoryEntry.fromJson(Map<String, dynamic> json) => RunHistoryEntry(
+        runId: json['run_id'] as String,
+        startedAtS: (json['started_at_s'] as num?)?.toDouble(),
+        status: RunHistoryStatus.fromWire(json['status'] as String),
+        latestTimeS: (json['latest_time_s'] as num?)?.toDouble(),
+        endTimeS: (json['end_time_s'] as num?)?.toDouble(),
+        request: json['request'] as Map<String, dynamic>?,
+        hasHeightmap: json['has_heightmap'] as bool? ?? false,
+      );
+}

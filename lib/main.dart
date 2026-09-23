@@ -46,6 +46,20 @@ double _computeSurfaceReferenceMm(Heightmap emptyGroove) {
   return count == 0 ? emptyGroove.zMax : sum / count;
 }
 
+const _monthNames = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// "Sep 23, 06:36" -- no `intl` dependency needed for a single call site.
+String _formatRunHistoryDate(DateTime? dt) {
+  if (dt == null) return 'unknown time';
+  final local = dt.toLocal();
+  final month = _monthNames[local.month - 1];
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '$month ${local.day}, $hh:$mm';
+}
+
 void main() {
   runApp(const WeldBenchApp());
 }
@@ -505,6 +519,61 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
         },
       );
 
+  /// Fetches every weld weld_service has ever staged (see GET /runs) and
+  /// lets the user pick one to view, regardless of how it ended -- done,
+  /// still running, cleanly paused, or abandoned by a crash. Selecting an
+  /// entry reuses [_viewLastResult] to display it exactly like the
+  /// startup-gate dialog's "View last result" action: a single best-effort
+  /// fetch of whatever heightmap that run has, landing in the normal static
+  /// 4-panel comparison view, read-only, no polling.
+  Future<void> _showRunHistory() async {
+    List<RunHistoryEntry> history;
+    try {
+      history = await widget.weldService.fetchRunHistory();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorText = 'Failed to fetch run history: $e');
+      return;
+    }
+    if (!mounted) return;
+
+    final selected = await showDialog<RunHistoryEntry>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Past welds'),
+        content: SizedBox(
+          width: 480,
+          child: history.isEmpty
+              ? const Text('No past welds found.')
+              : SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final entry in history)
+                        ListTile(
+                          enabled: entry.hasHeightmap,
+                          title: Text(_formatRunHistoryDate(entry.startedAt)),
+                          subtitle: Text(
+                            entry.hasHeightmap ? entry.status.label : '${entry.status.label} — no result saved',
+                          ),
+                          onTap: entry.hasHeightmap ? () => Navigator.pop(dialogContext, entry) : null,
+                        ),
+                    ],
+                  ),
+                ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
+        ],
+      ),
+    );
+
+    if (selected != null && mounted) {
+      await _viewLastResult(selected.runId);
+    }
+  }
+
   /// A non-resumable (crashed/force-quit/abandoned) run's dead end -- see
   /// IncompleteRun.resumable and _IncompleteRunTile. Does NOT go through
   /// _driveRun: there's nothing to poll, nothing "running", and no resume
@@ -749,6 +818,16 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                 ),
               ),
             ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Center(
+              child: IconButton(
+                icon: const Icon(Icons.history),
+                tooltip: 'Past welds — view any earlier run, regardless of how it ended',
+                onPressed: _showRunHistory,
+              ),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Center(

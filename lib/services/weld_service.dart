@@ -199,6 +199,20 @@ class WeldService {
     }
   }
 
+  /// Fetches every run weld_service has ever staged (see GET /runs), found
+  /// by scanning its runs/ directory directly rather than relying on
+  /// in-memory state -- covers runs from before the current weld_service
+  /// process even started. Backs the "past welds" dropdown (see main.dart).
+  /// Newest-first, as the server already sorts it.
+  Future<List<RunHistoryEntry>> fetchRunHistory() async {
+    final resp = await _client.get(baseUri.resolve('/runs'));
+    if (resp.statusCode != 200) {
+      throw WeldServiceException('Failed to fetch run history: HTTP ${resp.statusCode} ${resp.body}');
+    }
+    final list = jsonDecode(resp.body) as List;
+    return list.map((e) => RunHistoryEntry.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
   /// Fetches every run currently left `incomplete` on weld_service (see GET
   /// /runs/incomplete) -- surfaced once at startup so the user can choose to
   /// resume or restart each one (see main.dart's _StartupGate).

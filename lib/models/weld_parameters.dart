@@ -58,7 +58,7 @@ class WeldParameters {
     this.wireDiameterMm = 1.2,
     this.wireMaterial = WireMaterial.mildSteel,
     this.shieldingGas = ShieldingGas.argonCo2Mix,
-    this.travelSpeedMmPerS = 0.0, // 0 = stationary tack weld
+    this.travelSpeedMmPerS = 10.0 * 25.4 / 60.0, // 10 in/min = 4.2333... mm/s
     this.travelAngleDeg = 0.0,
     this.workAngleDeg = 0.0,
     this.contactTipToWorkDistanceMm = 12.0,
@@ -238,27 +238,33 @@ final List<MapEntry<String, List<LeverSpec>>> leverGroups = [
       extraHint: (p) => 'total simulated: ~${(p.weldDurationMs * 3).round()}ms (incl. ramp-down + cooldown)',
     ),
   ]),
-  MapEntry('Performance (doesn\'t affect the result)', [
-    LeverSpec(
-      label: 'Parallel cores',
-      unit: '',
-      min: 1,
-      max: 8,
-      modeled: true,
-      isInteger: true,
-      get: (p) => p.parallelCores,
-      set: (p, v) => p.parallelCores = v,
-      // decomposePar/mpirun only kick in above 1 -- see fluid's
-      // case_runner::run_ferrous_foam_with_snapshots. 6 is this machine's
-      // measured sweet spot (8 physical cores; a solver this
-      // communication-heavy sees fading returns before saturating even
-      // that), not an arbitrary default.
-      extraHint: (p) => p.parallelCores <= 1
-          ? 'serial -- the original single-core path'
-          : 'splits the solve across ${p.parallelCores.round()} cores (scotch decomposition)',
-    ),
-  ]),
 ];
+
+/// Lives in the AppBar toolbar (see main.dart), not the scrollable
+/// parameter panel below -- it's a run-speed knob, not a process parameter,
+/// so it stays visible and reachable alongside the Weld button rather than
+/// scrolled away with everything else. Kept as a LeverSpec anyway (rather
+/// than a bespoke bare double) so its label/range/hint have exactly one
+/// definition, shared with anything else that ever wants to render it the
+/// same way a process-parameter lever renders.
+final LeverSpec parallelCoresLever = LeverSpec(
+  label: 'Cores',
+  unit: '',
+  min: 1,
+  max: 8,
+  modeled: true,
+  isInteger: true,
+  get: (p) => p.parallelCores,
+  set: (p, v) => p.parallelCores = v,
+  // decomposePar/mpirun only kick in above 1 -- see fluid's
+  // case_runner::run_ferrous_foam_with_snapshots. 6 is this machine's
+  // measured sweet spot (8 physical cores; a solver this
+  // communication-heavy sees fading returns before saturating even that),
+  // not an arbitrary default.
+  extraHint: (p) => p.parallelCores <= 1
+      ? 'serial -- the original single-core path'
+      : 'splits the solve across ${p.parallelCores.round()} cores (scotch decomposition)',
+);
 
 /// Joint geometry (plate thickness, groove angle, root gap, root face) is
 /// intentionally NOT an editable lever in this build: the current target is

@@ -590,7 +590,20 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
     return Scaffold(
       appBar: AppBar(
         title: const Text('weldBench'),
+        // Wrapped in one scrolling row rather than a fixed-width actions
+        // list -- this toolbar has grown a control at a time over the
+        // course of the project (colormap, view mode, cross-section
+        // picker, pause, cores, weld) and a fixed Row silently overflows
+        // once it no longer fits the window, hiding whatever's off the
+        // right edge. Scrolling degrades gracefully at any window width
+        // instead of needing a fresh pixel-budget fix every time one more
+        // control is added.
         actions: [
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              reverse: true,
+              child: Row(children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Center(
@@ -645,6 +658,43 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
               ),
             ),
           Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '${parallelCoresLever.label} ${_params.parallelCores.round()}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  SizedBox(
+                    width: 80,
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 2,
+                        overlayShape: SliderComponentShape.noOverlay,
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                      ),
+                      child: Slider(
+                        value: _params.parallelCores.clamp(parallelCoresLever.min, parallelCoresLever.max),
+                        min: parallelCoresLever.min,
+                        max: parallelCoresLever.max,
+                        divisions: (parallelCoresLever.max - parallelCoresLever.min).round(),
+                        label: _params.parallelCores.round().toString(),
+                        // Splits the solve when the NEXT weld starts, not
+                        // something already running -- disabled mid-run so
+                        // it can't look like it's doing something live.
+                        onChanged: _running
+                            ? null
+                            : (v) => setState(() => _params.parallelCores = v.roundToDouble()),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Center(
               child: FilledButton.icon(
@@ -652,6 +702,9 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                 icon: const Icon(Icons.local_fire_department),
                 label: const Text('Weld'),
               ),
+            ),
+          ),
+              ]),
             ),
           ),
         ],

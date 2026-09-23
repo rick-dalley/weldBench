@@ -81,12 +81,21 @@ class IncompleteRun {
   final double? latestTimeS;
   final double? endTimeS;
   final Map<String, dynamic>? request;
+  // True only if this run was stopped via an explicit, deliberate Pause
+  // that confirmed ferrousFoam exited cleanly (see fluid's
+  // case_runner::pause_run / is_paused_cleanly) -- false for a run left by
+  // a crash/force-quit/kill -9, which is never safe to resume from (the
+  // last written timestep may itself be mid-write/torn). A non-resumable
+  // run's last snapshot is still viewable read-only ("View last result"),
+  // just not continuable ("Continue").
+  final bool resumable;
 
   const IncompleteRun({
     required this.runId,
     this.latestTimeS,
     this.endTimeS,
     this.request,
+    required this.resumable,
   });
 
   factory IncompleteRun.fromJson(Map<String, dynamic> json) => IncompleteRun(
@@ -94,15 +103,32 @@ class IncompleteRun {
         latestTimeS: (json['latest_time_s'] as num?)?.toDouble(),
         endTimeS: (json['end_time_s'] as num?)?.toDouble(),
         request: json['request'] as Map<String, dynamic>?,
+        resumable: json['resumable'] as bool? ?? false,
       );
 }
 
 /// What the user picked in the startup gate's incomplete-run dialog (see
 /// main.dart's _StartupGate) -- carried into WeldBenchHome so it can kick
-/// off the resume/restart the same way a fresh "Weld" button press would.
+/// off the resume/restart/view the same way a fresh "Weld" button press
+/// would (resume/restart) or as a plain one-shot fetch (view).
+enum RunActionKind {
+  /// Continue solving from where it left off -- only ever offered for a
+  /// `resumable: true` run (see IncompleteRun.resumable).
+  resume,
+
+  /// Discard progress and re-solve from scratch with the same parameters.
+  restart,
+
+  /// A non-resumable (crashed/abandoned) run's dead end: fetch whatever
+  /// partial heightmap snapshot it left behind and show it read-only in the
+  /// normal comparison view -- no resume, no polling, no "still running"
+  /// spinner.
+  view,
+}
+
 class PendingRunAction {
   final String runId;
-  final bool restart;
+  final RunActionKind kind;
 
-  const PendingRunAction({required this.runId, required this.restart});
+  const PendingRunAction({required this.runId, required this.kind});
 }

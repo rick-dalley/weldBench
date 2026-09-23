@@ -25,6 +25,8 @@ import '../models/weld_parameters.dart';
 ///                                    _StartupGate)
 ///   POST /runs/{run_id}/resume    -> {"run_id": "..."} then poll like runWeld
 ///   POST /runs/{run_id}/restart   -> {"run_id": "..."} then poll like runWeld
+///   POST /runs/{run_id}/pause     -> {"run_id": "..."} then poll until not
+///                                    `running` (see [WeldService.pauseRun])
 class WeldServiceException implements Exception {
   final String message;
   WeldServiceException(this.message);
@@ -107,9 +109,62 @@ class WeldService {
     return _pollUntilDone(runId, onProgress: onProgress, pollInterval: pollInterval, timeout: timeout);
   }
 
+  /// Deliberately (and only ever safely-resumably) stops a currently-running
+  /// run early: POSTs /runs/{run_id}/pause, which rewrites the case's
+  /// controlDict to stop cleanly and waits for ferrousFoam to actually exit
+  /// -- see fluid's case_runner::pause_run, which can take up to a few
+  /// minutes -- then polls status here until it's no longer `running`.
+  /// Normally settles into `incomplete` (successfully, safely paused --
+  /// see IncompleteRun.resumable), but returns as soon as the status is
+  /// anything other than `running` (also covering the rare race where the
+  /// solve finishes on its own right as the pause request lands, or fails).
+  ///
+  /// This poll is independent of (and deliberately redundant with) whatever
+  /// runWeld/resumeRun/restartRun poll is already in flight for this run_id
+  /// -- that poll's own [_pollUntilDone] also treats `incomplete` as
+  /// terminal now, and is what actually flips a caller's "running"/result
+  /// state; this method exists so a caller can await the pause action
+  /// itself (e.g. to know when it's safe to re-enable a "Pause" button)
+  /// without depending on that other poll's callback timing.
+  Future<void> pauseRun(
+    String runId, {
+    void Function(RunStatusUpdate progress)? onProgress,
+    Duration pollInterval = const Duration(milliseconds: 750),
+    // Mirrors case_runner::pause_run's own generous (few-minutes) timeout
+    // plus slack for the HTTP round trip/poll cadence -- pausing should
+    // normally be much faster than a full solve, so this is intentionally
+    // much shorter than runWeld's 3-hour safety backstop.
+    Duration timeout = const Duration(minutes: 10),
+  }) async {
+    final resp = await _client.post(baseUri.resolve('/runs/$runId/pause'));
+    if (resp.statusCode != 200) {
+      throw WeldServiceException('Failed to pause run $runId: HTTP ${resp.statusCode} ${resp.body}');
+    }
+    final deadline = DateTime.now().add(timeout);
+    while (true) {
+      if (DateTime.now().isAfter(deadline)) {
+        throw WeldServiceException('Pausing run $runId timed out after $timeout');
+      }
+      final statusResp = await _client.get(baseUri.resolve('/runs/$runId'));
+      if (statusResp.statusCode != 200) {
+        throw WeldServiceException('Failed to poll run $runId while pausing: HTTP ${statusResp.statusCode}');
+      }
+      final update = RunStatusUpdate.fromJson(jsonDecode(statusResp.body) as Map<String, dynamic>);
+      onProgress?.call(update);
+      if (update.status != 'running') return;
+      await Future.delayed(pollInterval);
+    }
+  }
+
   /// Shared status-poll-until-done/failed loop backing [runWeld],
   /// [resumeRun], and [restartRun] -- they only differ in how the run_id
-  /// they poll came to exist.
+  /// they poll came to exist. Also treats a transition to `incomplete` as
+  /// terminal (alongside `done`), fetching whatever heightmap snapshot is
+  /// currently available exactly like a finished result -- this is what
+  /// lets an in-flight run/resume/restart poll unwind cleanly (back to
+  /// "not running") the moment a concurrent Pause request (see [pauseRun])
+  /// takes effect, instead of spinning until the 3-hour timeout waiting for
+  /// a `done` that will never come until the run is resumed again.
   Future<Heightmap> _pollUntilDone(
     String runId, {
     void Function(RunStatusUpdate progress)? onProgress,
@@ -129,7 +184,7 @@ class WeldService {
       final update = RunStatusUpdate.fromJson(jsonDecode(statusResp.body) as Map<String, dynamic>);
       onProgress?.call(update);
 
-      if (update.status == 'done') {
+      if (update.status == 'done' || update.status == 'incomplete') {
         final resultResp = await _client.get(baseUri.resolve('/runs/$runId/heightmap'));
         if (resultResp.statusCode != 200) {
           throw WeldServiceException(

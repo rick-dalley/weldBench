@@ -160,8 +160,11 @@ class _StartupGateState extends State<_StartupGate> {
               children: [
                 const Text(
                   'weld_service was interrupted mid-solve on the run(s) below. '
-                  'Continue from where it left off, or discard it and start '
-                  'over with the same parameters.',
+                  'A run that was cleanly paused can continue from where it '
+                  'left off; one left by a crash or force-quit cannot be '
+                  'safely resumed, but its last snapshot can still be viewed, '
+                  'or it can be discarded and started over with the same '
+                  'parameters.',
                 ),
                 const SizedBox(height: 12),
                 for (final run in incomplete) ...[
@@ -272,15 +275,34 @@ class _IncompleteRunTile extends StatelessWidget {
                     style: const TextStyle(fontWeight: FontWeight.bold)),
                 Text(summary, style: Theme.of(context).textTheme.bodySmall),
                 Text(progress, style: Theme.of(context).textTheme.bodySmall),
+                Text(
+                  run.resumable ? 'cleanly paused' : 'not resumable (crash/force-quit)',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: run.resumable ? Colors.green.shade700 : Colors.orange.shade800,
+                      ),
+                ),
               ],
             ),
           ),
+          // Only a cleanly-paused run is safe to continue -- see
+          // IncompleteRun.resumable's doc comment.
+          if (run.resumable)
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(context, PendingRunAction(runId: run.runId, kind: RunActionKind.resume)),
+              child: const Text('Continue'),
+            ),
+          // A crashed/abandoned run's dead end: show whatever partial
+          // snapshot it left behind, read-only -- no resume option.
+          if (!run.resumable)
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(context, PendingRunAction(runId: run.runId, kind: RunActionKind.view)),
+              child: const Text('View last result'),
+            ),
           TextButton(
-            onPressed: () => Navigator.pop(context, PendingRunAction(runId: run.runId, restart: false)),
-            child: const Text('Continue'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, PendingRunAction(runId: run.runId, restart: true)),
+            onPressed: () =>
+                Navigator.pop(context, PendingRunAction(runId: run.runId, kind: RunActionKind.restart)),
             child: const Text('Start over'),
           ),
         ],
@@ -358,10 +380,13 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
 
     final pending = widget.initialRunAction;
     if (pending != null) {
-      if (pending.restart) {
-        _restartRun(pending.runId);
-      } else {
-        _resumeRun(pending.runId);
+      switch (pending.kind) {
+        case RunActionKind.restart:
+          _restartRun(pending.runId);
+        case RunActionKind.resume:
+          _resumeRun(pending.runId);
+        case RunActionKind.view:
+          _viewLastResult(pending.runId);
       }
     }
   }
@@ -479,6 +504,51 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
           return widget.weldService.restartRun(runId, onProgress: onProgress);
         },
       );
+
+  /// A non-resumable (crashed/force-quit/abandoned) run's dead end -- see
+  /// IncompleteRun.resumable and _IncompleteRunTile. Does NOT go through
+  /// _driveRun: there's nothing to poll, nothing "running", and no resume
+  /// option -- just a single best-effort fetch of whatever partial
+  /// heightmap snapshot the abandoned run left behind, landing directly in
+  /// the normal static 4-panel comparison view, read-only.
+  Future<void> _viewLastResult(String runId) async {
+    final hm = await widget.weldService.fetchHeightmapIfAvailable(runId);
+    if (!mounted) return;
+    setState(() {
+      _simulated = hm;
+      _running = false;
+      _stages = [];
+      _solveProgress = null;
+      _errorText = hm == null ? 'No snapshot was available for run $runId' : null;
+    });
+  }
+
+  /// The one legitimate way to end a weld early in a way that's later
+  /// resumable (see fluid's case_runner::pause_run) -- POSTs
+  /// /runs/{run_id}/pause and awaits it settling (see
+  /// WeldService.pauseRun). Deliberately does NOT itself flip `_running`
+  /// or `_simulated`: the run/resume/restart poll already in flight (inside
+  /// _driveRun, via WeldService's shared _pollUntilDone) now treats a
+  /// transition to `incomplete` as terminal exactly like `done`, so that
+  /// poll unwinds on its own the moment the pause takes effect -- this
+  /// method only needs to track its own "pausing" flag so the button can't
+  /// be double-pressed, and surface a pause-specific error (e.g. a timeout)
+  /// if one occurs.
+  bool _pausing = false;
+
+  Future<void> _pauseRun() async {
+    final runId = _currentRunId;
+    if (runId == null || _pausing) return;
+    setState(() => _pausing = true);
+    try {
+      await widget.weldService.pauseRun(runId);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorText = e.toString());
+    } finally {
+      if (mounted) setState(() => _pausing = false);
+    }
+  }
 
   /// Starts (or restarts) the periodic GET /runs/{run_id}/heightmap poll
   /// that keeps the ferrousFoam panel updating with live mid-solve snapshots
@@ -668,6 +738,17 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
               ),
             ),
           ),
+          if (_running)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Center(
+                child: OutlinedButton.icon(
+                  onPressed: _pausing ? null : _pauseRun,
+                  icon: const Icon(Icons.pause),
+                  label: Text(_pausing ? 'Pausing…' : 'Pause'),
+                ),
+              ),
+            ),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Center(

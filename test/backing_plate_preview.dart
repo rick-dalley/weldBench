@@ -11,11 +11,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:weld_bench/models/heightmap.dart';
 import 'package:weld_bench/widgets/point_cloud_view.dart';
 
-const _dataPath =
+const _emptyDataPath =
     '/tmp/claude-1000/-home-rick-Code-physics/c7400b2b-8608-47d0-ae45-3b490f44a1d7/scratchpad/real_empty_groove_fresh.json';
+const _weldedDataPath =
+    '/tmp/claude-1000/-home-rick-Code-physics/c7400b2b-8608-47d0-ae45-3b490f44a1d7/scratchpad/real_welded_groove_fresh.json';
 
-Future<void> _renderAt(WidgetTester tester, String label, bool showBackingPlate, String outPath) async {
-  final hm = Heightmap.fromJsonString(File(_dataPath).readAsStringSync());
+Future<void> _renderAt(
+  WidgetTester tester,
+  String label,
+  bool showBackingPlate,
+  String outPath, {
+  String dataPath = _emptyDataPath,
+}) async {
+  final hm = Heightmap.fromJsonString(File(dataPath).readAsStringSync());
   await tester.pumpWidget(
     RepaintBoundary(
       child: MaterialApp(
@@ -58,6 +66,22 @@ void main() {
     await tester.runAsync(() async {
       await _renderAt(tester, 'Before fix', false, '/tmp/weldbench_backing_plate_before.png');
       await _renderAt(tester, 'After fix', true, '/tmp/weldbench_backing_plate_after.png');
+    });
+  });
+
+  testWidgets('preview: real welded scan (with tack bead), with and without the width cap', (tester) async {
+    tester.view.physicalSize = const Size(700, 720);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.runAsync(() async {
+      await _renderAt(
+        tester,
+        'Welded, backing plate on',
+        true,
+        '/tmp/weldbench_backing_plate_welded.png',
+        dataPath: _weldedDataPath,
+      );
     });
   });
 }

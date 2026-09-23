@@ -428,12 +428,31 @@ class _PointCloudPainter extends CustomPainter {
   // path at all, gated by showBackingPlate) wouldn't be affected either way.
   static const double _gapDetectionToleranceMm = 1.2;
 
+  // Hard ceiling on the detected notch width, regardless of how far the
+  // tolerance-based expansion below would otherwise go. Needed for the
+  // welded scan specifically: where a tack bead fills the groove, its own
+  // tapered edges stay within _gapDetectionToleranceMm of the row's
+  // minimum over a much wider span than the true notch (observed up to
+  // ~10mm on real data), which would wrongly carve a hole out of solid
+  // bead material -- "the tack doesn't fill in" in the 3D view. The real
+  // root gap is a known, fixed physical dimension (~4.3mm, confirmed
+  // against both the calibration constant used elsewhere in this app and
+  // directly against bare-groove rows of the real scan, which detect
+  // 4.3-4.5mm on their own, well under this cap); this just stops the
+  // *welded* rows' wider, gentler bead-taper dip from being mistaken for
+  // it. Verified against real data: with this cap, bare-groove rows are
+  // completely unaffected (already under it), while previously-inflated
+  // welded rows correctly clamp down to a narrow strip again.
+  static const double _gapMaxWidthMm = 6.0;
+
   /// The raw X-range (in mm) of the row's narrow root-gap notch, isolated
-  /// from the broader V-shaped floor around it by looking only at points
-  /// within [_gapDetectionToleranceMm] of the row's minimum. The notch is a
-  /// real, physical feature of the root gap itself (present the full length
-  /// of the groove, not just where a tack weld happens to sit), so this is
-  /// expected to find something on every row of a real scan.
+  /// from the broader V-shaped floor (or, on a welded row, the bead) around
+  /// it by looking only at points within [_gapDetectionToleranceMm] of the
+  /// row's minimum, capped to [_gapMaxWidthMm] wide (see its doc comment).
+  /// The notch is a real, physical feature of the root gap itself (present
+  /// the full length of the groove, not just where a tack weld happens to
+  /// sit), so this is expected to find something on every row of a real
+  /// scan.
   ({double xLoMm, double xHiMm}) _detectGapXRangeMm(int yi) {
     final nx = heightmap.nx;
     var minZ = double.infinity;
@@ -453,6 +472,19 @@ class _PointCloudPainter extends CustomPainter {
     var hiXi = minXi;
     while (hiXi < nx - 1 && heightmap.zMm[hiXi + 1][yi] <= threshold) {
       hiXi++;
+    }
+    // Shrink symmetrically toward the true minimum until back under the
+    // cap, preferring to trim whichever side is currently farther from it.
+    while (heightmap.xMm[hiXi] - heightmap.xMm[loXi] > _gapMaxWidthMm && (hiXi > minXi || loXi < minXi)) {
+      final distHi = hiXi > minXi ? heightmap.xMm[hiXi] - heightmap.xMm[minXi] : -1.0;
+      final distLo = loXi < minXi ? heightmap.xMm[minXi] - heightmap.xMm[loXi] : -1.0;
+      if (distHi >= distLo && hiXi > minXi) {
+        hiXi--;
+      } else if (loXi < minXi) {
+        loXi++;
+      } else {
+        hiXi--;
+      }
     }
     return (xLoMm: heightmap.xMm[loXi], xHiMm: heightmap.xMm[hiXi]);
   }

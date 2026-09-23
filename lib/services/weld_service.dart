@@ -53,13 +53,6 @@ class WeldService {
     void Function(String runId)? onRunId,
     void Function(RunStatusUpdate progress)? onProgress,
     Duration pollInterval = const Duration(milliseconds: 750),
-    // At the current RealGrooveCase mesh resolution, a full-length (250ms)
-    // weld takes on the order of 35-40 minutes wall-clock, and the
-    // weld_duration_ms lever goes up to 1000ms (~4x that). 3 hours gives
-    // generous headroom without being effectively unbounded; this is a
-    // safety backstop, not an expected wait -- the stage timeline is what
-    // tells you how it's actually progressing.
-    Duration timeout = const Duration(hours: 3),
   }) async {
     final startResp = await _client.post(
       baseUri.resolve('/runs'),
@@ -72,7 +65,7 @@ class WeldService {
     }
     final runId = (jsonDecode(startResp.body) as Map<String, dynamic>)['run_id'] as String;
     onRunId?.call(runId);
-    return _pollUntilDone(runId, onProgress: onProgress, pollInterval: pollInterval, timeout: timeout);
+    return _pollUntilDone(runId, onProgress: onProgress, pollInterval: pollInterval);
   }
 
   /// Resumes a run left `incomplete` (or `failed`) by a process that went
@@ -84,13 +77,12 @@ class WeldService {
     String runId, {
     void Function(RunStatusUpdate progress)? onProgress,
     Duration pollInterval = const Duration(milliseconds: 750),
-    Duration timeout = const Duration(hours: 3),
   }) async {
     final resp = await _client.post(baseUri.resolve('/runs/$runId/resume'));
     if (resp.statusCode != 200) {
       throw WeldServiceException('Failed to resume run $runId: HTTP ${resp.statusCode} ${resp.body}');
     }
-    return _pollUntilDone(runId, onProgress: onProgress, pollInterval: pollInterval, timeout: timeout);
+    return _pollUntilDone(runId, onProgress: onProgress, pollInterval: pollInterval);
   }
 
   /// Discards an incomplete/failed run's progress and re-runs it from
@@ -100,13 +92,12 @@ class WeldService {
     String runId, {
     void Function(RunStatusUpdate progress)? onProgress,
     Duration pollInterval = const Duration(milliseconds: 750),
-    Duration timeout = const Duration(hours: 3),
   }) async {
     final resp = await _client.post(baseUri.resolve('/runs/$runId/restart'));
     if (resp.statusCode != 200) {
       throw WeldServiceException('Failed to restart run $runId: HTTP ${resp.statusCode} ${resp.body}');
     }
-    return _pollUntilDone(runId, onProgress: onProgress, pollInterval: pollInterval, timeout: timeout);
+    return _pollUntilDone(runId, onProgress: onProgress, pollInterval: pollInterval);
   }
 
   /// Deliberately (and only ever safely-resumably) stops a currently-running
@@ -163,19 +154,27 @@ class WeldService {
   /// currently available exactly like a finished result -- this is what
   /// lets an in-flight run/resume/restart poll unwind cleanly (back to
   /// "not running") the moment a concurrent Pause request (see [pauseRun])
-  /// takes effect, instead of spinning until the 3-hour timeout waiting for
-  /// a `done` that will never come until the run is resumed again.
+  /// takes effect.
+  ///
+  /// Deliberately has no wall-clock timeout: a full-length weld is expected
+  /// to take many hours (observed ~12.5h for a real run at the current
+  /// weld_duration_ms range), and an arbitrary real-world-hours ceiling
+  /// only serves to lose track of a run that's still genuinely progressing
+  /// -- see the "Past welds" dropdown incident this replaced a 3-hour
+  /// timeout over. The real, meaningful bound on how long this polls is
+  /// already the run itself: ferrousFoam stops on its own once it reaches
+  /// its target simulated end_time_s (driven by weld_duration_ms and, via
+  /// travel_speed, how far the arc has actually traveled) -- i.e. the run
+  /// is capped by distance/duration of the weld itself, not by how long a
+  /// human has been waiting. If a run is truly stuck forever (not just
+  /// slow), the stage timeline/solve-progress callbacks -- or, after an app
+  /// restart, GET /runs -- are what surface that, not a client-side clock.
   Future<Heightmap> _pollUntilDone(
     String runId, {
     void Function(RunStatusUpdate progress)? onProgress,
     Duration pollInterval = const Duration(milliseconds: 750),
-    Duration timeout = const Duration(hours: 3),
   }) async {
-    final deadline = DateTime.now().add(timeout);
     while (true) {
-      if (DateTime.now().isAfter(deadline)) {
-        throw WeldServiceException('Run $runId timed out after $timeout');
-      }
       final statusResp = await _client.get(baseUri.resolve('/runs/$runId'));
       if (statusResp.statusCode != 200) {
         throw WeldServiceException(

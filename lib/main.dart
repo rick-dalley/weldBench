@@ -97,12 +97,6 @@ class _StartupGateState extends State<_StartupGate> {
       await _launcher.ensureRunning(onStatus: (s) {
         if (mounted) setState(() => _status = s);
       });
-      // One-time startup check: if weld_service was killed (or the whole
-      // app was) mid-solve on some earlier run, offer to continue or
-      // discard it before showing the normal UI. Best-effort -- a failure
-      // here shouldn't block startup, it just means the orphaned run isn't
-      // offered this time.
-      await _checkIncompleteRuns();
       setState(() => _status = 'loading reference scans...');
       final empty = await _weldService.fetchEmptyGrooveReference();
       final welded = await _weldService.fetchWeldedGrooveReference();
@@ -128,64 +122,6 @@ class _StartupGateState extends State<_StartupGate> {
       });
     } catch (e) {
       // ignore: the 4th panel will show its own "unavailable" state.
-    }
-  }
-
-  /// Fetches any runs weld_service considers `incomplete` (left mid-solve by
-  /// a process that went away -- see fluid's run_store::scan_and_seed) and,
-  /// if there are any, shows a one-time dialog offering to continue or
-  /// discard each one. This is a startup gate, not a persistent view, so a
-  /// plain AlertDialog is enough -- dismissing it without choosing just
-  /// proceeds to the normal UI, leaving the orphaned run(s) alone (nothing
-  /// is auto-deleted).
-  Future<void> _checkIncompleteRuns() async {
-    List<IncompleteRun> incomplete;
-    try {
-      incomplete = await _weldService.fetchIncompleteRuns();
-    } catch (_) {
-      return;
-    }
-    if (incomplete.isEmpty || !mounted) return;
-
-    final choice = await showDialog<PendingRunAction>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Unfinished weld run(s) found'),
-        content: SizedBox(
-          width: 480,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  'weld_service was interrupted mid-solve on the run(s) below. '
-                  'A run that was cleanly paused can continue from where it '
-                  'left off; one left by a crash or force-quit cannot be '
-                  'safely resumed, but its last snapshot can still be viewed, '
-                  'or it can be discarded and started over with the same '
-                  'parameters.',
-                ),
-                const SizedBox(height: 12),
-                for (final run in incomplete) ...[
-                  _IncompleteRunTile(run: run),
-                  const Divider(),
-                ],
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Ignore for now'),
-          ),
-        ],
-      ),
-    );
-
-    if (choice != null && mounted) {
-      setState(() => _pendingRunAction = choice);
     }
   }
 
@@ -239,74 +175,6 @@ class _StartupGateState extends State<_StartupGate> {
       emptyGroove: _emptyGroove!,
       weldedGroove: _weldedGroove!,
       initialRunAction: _pendingRunAction,
-    );
-  }
-}
-
-/// One row of the startup gate's incomplete-run dialog: a short id, whatever
-/// request params weld_service could read back (request.json may be
-/// missing, hence the null-aware fallback text), and how far it got before
-/// being interrupted.
-class _IncompleteRunTile extends StatelessWidget {
-  final IncompleteRun run;
-
-  const _IncompleteRunTile({required this.run});
-
-  @override
-  Widget build(BuildContext context) {
-    final req = run.request;
-    final summary = req != null
-        ? '${req['voltage_v']}V · ${req['wire_feed_speed_m_per_min']} m/min · '
-            '${req['weld_duration_ms']}ms arc-on'
-        : 'parameters unavailable';
-    final progress = (run.latestTimeS != null && run.endTimeS != null)
-        ? 'solved to ${run.latestTimeS!.toStringAsFixed(4)}s of ${run.endTimeS!.toStringAsFixed(4)}s'
-        : 'progress unknown';
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Run ${run.runId.substring(0, math.min(8, run.runId.length))}',
-                    style: const TextStyle(fontWeight: FontWeight.bold)),
-                Text(summary, style: Theme.of(context).textTheme.bodySmall),
-                Text(progress, style: Theme.of(context).textTheme.bodySmall),
-                Text(
-                  run.resumable ? 'cleanly paused' : 'not resumable (crash/force-quit)',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: run.resumable ? Colors.green.shade700 : Colors.orange.shade800,
-                      ),
-                ),
-              ],
-            ),
-          ),
-          // Only a cleanly-paused run is safe to continue -- see
-          // IncompleteRun.resumable's doc comment.
-          if (run.resumable)
-            TextButton(
-              onPressed: () =>
-                  Navigator.pop(context, PendingRunAction(runId: run.runId, kind: RunActionKind.resume)),
-              child: const Text('Continue'),
-            ),
-          // A crashed/abandoned run's dead end: show whatever partial
-          // snapshot it left behind, read-only -- no resume option.
-          if (!run.resumable)
-            TextButton(
-              onPressed: () =>
-                  Navigator.pop(context, PendingRunAction(runId: run.runId, kind: RunActionKind.view)),
-              child: const Text('View last result'),
-            ),
-          TextButton(
-            onPressed: () =>
-                Navigator.pop(context, PendingRunAction(runId: run.runId, kind: RunActionKind.restart)),
-            child: const Text('Start over'),
-          ),
-        ],
-      ),
     );
   }
 }

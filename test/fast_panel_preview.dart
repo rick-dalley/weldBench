@@ -19,6 +19,7 @@ import 'package:weld_bench/main.dart';
 import 'package:weld_bench/models/heightmap.dart';
 import 'package:weld_bench/services/weld_fast_service.dart';
 import 'package:weld_bench/widgets/heightmap_view.dart';
+import 'package:weld_bench/widgets/point_cloud_view.dart';
 
 Heightmap _syntheticFastPrediction() {
   // Mimics the real weld_fast_service response shape (bare groove + a
@@ -72,6 +73,7 @@ void main() {
                   outputs: outputs,
                   findings: findings,
                   error: null,
+                  viewMode: ViewMode.flat,
                   colormap: HeightmapColormap.viridis,
                 ),
               ),

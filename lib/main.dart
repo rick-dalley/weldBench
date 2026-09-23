@@ -13,6 +13,7 @@ import 'services/weld_fast_service.dart';
 import 'services/weld_service.dart';
 import 'widgets/heightmap_view.dart';
 import 'widgets/parameter_panel.dart';
+import 'widgets/point_cloud_view.dart';
 import 'widgets/stage_timeline.dart';
 
 void main() {
@@ -177,6 +178,7 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
   List<StageRecord> _stages = [];
   SolveProgress? _solveProgress;
   HeightmapColormap _colormap = HeightmapColormap.viridis;
+  ViewMode _viewMode = ViewMode.flat;
 
   // weld_fast_service's live prediction -- updated on every slider change
   // (lightly debounced, see _scheduleFastPrediction), not gated by the
@@ -309,6 +311,19 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
             ),
           ),
           Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Center(
+              child: SegmentedButton<ViewMode>(
+                segments: const [
+                  ButtonSegment(value: ViewMode.flat, label: Text('2D')),
+                  ButtonSegment(value: ViewMode.rotatable, label: Text('3D')),
+                ],
+                selected: {_viewMode},
+                onSelectionChanged: (s) => setState(() => _viewMode = s.first),
+              ),
+            ),
+          ),
+          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Center(
               child: FilledButton.icon(
@@ -381,30 +396,33 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                     child: Row(
                       children: [
                         Expanded(
-                          child: HeightmapView(
+                          child: AdaptiveHeightmapView(
                             title: 'Empty groove (no-tack scan)',
                             heightmap: widget.emptyGroove,
                             colormap: _colormap,
+                            viewMode: _viewMode,
                             zMinOverride: refZMin,
                             zMaxOverride: refZMax,
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: HeightmapView(
+                          child: AdaptiveHeightmapView(
                             title: 'Real weld (tack scan, ground truth)',
                             heightmap: widget.weldedGroove,
                             colormap: _colormap,
+                            viewMode: _viewMode,
                             zMinOverride: refZMin,
                             zMaxOverride: refZMax,
                           ),
                         ),
                         const SizedBox(width: 8),
                         Expanded(
-                          child: HeightmapView(
+                          child: AdaptiveHeightmapView(
                             title: 'ferrousFoam prediction',
                             heightmap: _simulated,
                             colormap: _colormap,
+                            viewMode: _viewMode,
                             loading: _running,
                           ),
                         ),
@@ -416,6 +434,7 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                             findings: _fastResult?.findings ?? const [],
                             error: _fastError,
                             colormap: _colormap,
+                            viewMode: _viewMode,
                           ),
                         ),
                       ],
@@ -441,6 +460,7 @@ class FastModelPanel extends StatelessWidget {
   final List<FastFinding> findings;
   final String? error;
   final HeightmapColormap colormap;
+  final ViewMode viewMode;
 
   const FastModelPanel({
     super.key,
@@ -449,6 +469,7 @@ class FastModelPanel extends StatelessWidget {
     required this.findings,
     required this.error,
     required this.colormap,
+    required this.viewMode,
   });
 
   @override
@@ -457,10 +478,11 @@ class FastModelPanel extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: HeightmapView(
+          child: AdaptiveHeightmapView(
             title: 'Fast model (weld_sim, live)',
             heightmap: heightmap,
             colormap: colormap,
+            viewMode: viewMode,
           ),
         ),
         if (error == null && outputs != null) ...[

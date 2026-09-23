@@ -31,6 +31,11 @@ class AdaptiveHeightmapView extends StatelessWidget {
   final double? zMinOverride;
   final double? zMaxOverride;
 
+  /// Passed through to whichever view is active; non-null only while the
+  /// caller's cross-section picker toolbar toggle is on (see main.dart), so
+  /// tapping a panel is a no-op the rest of the time.
+  final void Function(double xMm, double yMm)? onPointPicked;
+
   const AdaptiveHeightmapView({
     super.key,
     required this.title,
@@ -41,6 +46,7 @@ class AdaptiveHeightmapView extends StatelessWidget {
     this.statusText,
     this.zMinOverride,
     this.zMaxOverride,
+    this.onPointPicked,
   });
 
   @override
@@ -54,6 +60,7 @@ class AdaptiveHeightmapView extends StatelessWidget {
           statusText: statusText,
           zMinOverride: zMinOverride,
           zMaxOverride: zMaxOverride,
+          onPointPicked: onPointPicked,
         ),
       ViewMode.rotatable => PointCloudView(
           title: title,
@@ -62,6 +69,7 @@ class AdaptiveHeightmapView extends StatelessWidget {
           loading: loading,
           zMinOverride: zMinOverride,
           zMaxOverride: zMaxOverride,
+          onPointPicked: onPointPicked,
         ),
     };
   }
@@ -94,6 +102,16 @@ class PointCloudView extends StatefulWidget {
   final double initialAzimuth;
   final double initialElevation;
 
+  /// Called with the (xMm, yMm) of the visible surface point nearest a tap,
+  /// so a caller can pop up a 2D cross-section slice through that exact
+  /// spot -- rotating to near-edge-on gives the general shape, but reading
+  /// an exact depth off a tilted 3D view is still guesswork. Left null
+  /// (the default) to leave tapping alone -- callers only pass this while
+  /// their own "cross-section picker" toolbar toggle is active, so an
+  /// ordinary tap while just orbiting the view doesn't do anything
+  /// surprising.
+  final void Function(double xMm, double yMm)? onPointPicked;
+
   const PointCloudView({
     super.key,
     required this.title,
@@ -105,6 +123,7 @@ class PointCloudView extends StatefulWidget {
     this.zExaggeration = 3.0,
     this.initialAzimuth = -0.5,
     this.initialElevation = 0.5,
+    this.onPointPicked,
   });
 
   @override
@@ -153,28 +172,57 @@ class _PointCloudViewState extends State<PointCloudView> {
                 decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400)),
                 child: hm == null
                     ? const Center(child: Text('No data'))
-                    : GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onPanUpdate: (details) {
-                          setState(() {
-                            _azimuth += details.delta.dx * 0.01;
-                            _elevation =
-                                (_elevation - details.delta.dy * 0.01).clamp(_minElevation, _maxElevation);
-                          });
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          final size = constraints.biggest;
+                          final zMin = widget.zMinOverride ?? hm.zMin;
+                          final zMax = widget.zMaxOverride ?? hm.zMax;
+                          return MouseRegion(
+                            cursor: widget.onPointPicked != null
+                                ? SystemMouseCursors.precise
+                                : MouseCursor.defer,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onPanUpdate: (details) {
+                                setState(() {
+                                  _azimuth += details.delta.dx * 0.01;
+                                  _elevation = (_elevation - details.delta.dy * 0.01)
+                                      .clamp(_minElevation, _maxElevation);
+                                });
+                              },
+                              onDoubleTap: _resetView,
+                              onTapUp: widget.onPointPicked == null
+                                  ? null
+                                  : (details) {
+                                      final hit = hitTestGridPoint(
+                                        heightmap: hm,
+                                        zMin: zMin,
+                                        zMax: zMax,
+                                        azimuth: _azimuth,
+                                        elevation: _elevation,
+                                        zExaggeration: widget.zExaggeration,
+                                        size: size,
+                                        tapPosition: details.localPosition,
+                                      );
+                                      if (hit != null) {
+                                        widget.onPointPicked!(hm.xMm[hit.xi], hm.yMm[hit.yi]);
+                                      }
+                                    },
+                              child: CustomPaint(
+                                painter: _PointCloudPainter(
+                                  heightmap: hm,
+                                  zMin: zMin,
+                                  zMax: zMax,
+                                  colormap: widget.colormap,
+                                  azimuth: _azimuth,
+                                  elevation: _elevation,
+                                  zExaggeration: widget.zExaggeration,
+                                ),
+                                child: Container(),
+                              ),
+                            ),
+                          );
                         },
-                        onDoubleTap: _resetView,
-                        child: CustomPaint(
-                          painter: _PointCloudPainter(
-                            heightmap: hm,
-                            zMin: widget.zMinOverride ?? hm.zMin,
-                            zMax: widget.zMaxOverride ?? hm.zMax,
-                            colormap: widget.colormap,
-                            azimuth: _azimuth,
-                            elevation: _elevation,
-                            zExaggeration: widget.zExaggeration,
-                          ),
-                          child: Container(),
-                        ),
                       ),
               ),
               if (widget.loading)
@@ -189,7 +237,9 @@ class _PointCloudViewState extends State<PointCloudView> {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              'drag to rotate — double-tap to reset',
+              widget.onPointPicked != null
+                  ? 'tap to inspect a cross-section — drag to rotate'
+                  : 'drag to rotate — double-tap to reset',
               style: Theme.of(context).textTheme.bodySmall,
               textAlign: TextAlign.center,
             ),
@@ -246,6 +296,75 @@ RotatedPoint rotateAndProject(
   final z2 = y1 * sinEl + cz * cosEl;
 
   return RotatedPoint(x1, y2, z2);
+}
+
+class GridHit {
+  final int xi;
+  final int yi;
+  const GridHit(this.xi, this.yi);
+}
+
+/// Finds the full-resolution grid point whose rendered screen position is
+/// closest to [tapPosition], using the exact same projection math as
+/// [_PointCloudPainter] -- so "the point you tapped" really is the point
+/// you were looking at, not some other vertex. Among points within
+/// [pixelTolerance] of the tap, the frontmost (smallest camera-space depth)
+/// one wins ties, since that's the one actually visible at that screen
+/// location when nearer geometry occludes farther geometry. Public and
+/// pure so it's directly unit-testable, same as [rotateAndProject].
+GridHit? hitTestGridPoint({
+  required Heightmap heightmap,
+  required double zMin,
+  required double zMax,
+  required double azimuth,
+  required double elevation,
+  required double zExaggeration,
+  required Size size,
+  required Offset tapPosition,
+  double pixelTolerance = 18.0,
+}) {
+  final nx = heightmap.nx, ny = heightmap.ny;
+  if (nx == 0 || ny == 0) return null;
+  final xMid = (heightmap.xMin + heightmap.xMax) / 2;
+  final yMid = (heightmap.yMin + heightmap.yMax) / 2;
+  final zRange = (zMax - zMin).abs() < 1e-9 ? 1.0 : (zMax - zMin);
+  final zMid = (zMin + zMax) / 2;
+  final xySpan = math.max(heightmap.xMax - heightmap.xMin, heightmap.yMax - heightmap.yMin);
+  final baseScale = xySpan <= 0 ? 1.0 : 2.0 / xySpan;
+  final scale = math.min(size.width, size.height) * 0.42;
+  final centerX = size.width / 2;
+  final centerY = size.height / 2;
+
+  int? bestXi, bestYi;
+  var bestDepth = double.infinity;
+  var bestDistSq = double.infinity;
+  final toleranceSq = pixelTolerance * pixelTolerance;
+
+  for (var xi = 0; xi < nx; xi++) {
+    final x = heightmap.xMm[xi];
+    final cx = (x - xMid) * baseScale;
+    for (var yi = 0; yi < ny; yi++) {
+      final y = heightmap.yMm[yi];
+      final z = heightmap.zMm[xi][yi];
+      final cy = (y - yMid) * baseScale;
+      final cz = -(z - zMid) / zRange * zExaggeration;
+      final r = rotateAndProject(cx, cy, cz, azimuth: azimuth, elevation: elevation);
+      final sx = centerX + r.x * scale;
+      final sy = centerY - r.y * scale;
+      final dx = sx - tapPosition.dx;
+      final dy = sy - tapPosition.dy;
+      final distSq = dx * dx + dy * dy;
+      if (distSq > toleranceSq) continue;
+      if (r.depth < bestDepth - 1e-6 || (r.depth <= bestDepth + 1e-6 && distSq < bestDistSq)) {
+        bestDepth = r.depth;
+        bestDistSq = distSq;
+        bestXi = xi;
+        bestYi = yi;
+      }
+    }
+  }
+  if (bestXi == null || bestYi == null) return null;
+  return GridHit(bestXi, bestYi);
 }
 
 class _PointCloudPainter extends CustomPainter {

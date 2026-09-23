@@ -61,6 +61,11 @@ class HeightmapView extends StatefulWidget {
   final double? zMinOverride;
   final double? zMaxOverride;
 
+  /// Called with the (xMm, yMm) nearest a tap. Non-null only while the
+  /// caller's cross-section picker toolbar toggle is on -- see
+  /// [AdaptiveHeightmapView] and main.dart.
+  final void Function(double xMm, double yMm)? onPointPicked;
+
   const HeightmapView({
     super.key,
     required this.title,
@@ -70,6 +75,7 @@ class HeightmapView extends StatefulWidget {
     this.colormap = HeightmapColormap.viridis,
     this.zMinOverride,
     this.zMaxOverride,
+    this.onPointPicked,
   });
 
   @override
@@ -126,9 +132,36 @@ class _HeightmapViewState extends State<HeightmapView> {
                 decoration: BoxDecoration(border: Border.all(color: Colors.grey.shade400)),
                 child: (hm == null || _image == null)
                     ? const Center(child: Text('No data'))
-                    : CustomPaint(
-                        painter: _ImagePainter(_image!),
-                        child: Container(),
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          return MouseRegion(
+                            cursor: widget.onPointPicked != null
+                                ? SystemMouseCursors.precise
+                                : MouseCursor.defer,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTapUp: widget.onPointPicked == null
+                                  ? null
+                                  : (details) {
+                                      final size = constraints.biggest;
+                                      if (size.width <= 0 || size.height <= 0) return;
+                                      // Left=xMin/right=xMax, top=yMax/bottom=yMin --
+                                      // matches how _heightmapToImage lays out pixels
+                                      // (it flips the Y row order, but drawImageRect
+                                      // below never flips again).
+                                      final tx = (details.localPosition.dx / size.width).clamp(0.0, 1.0);
+                                      final ty = (details.localPosition.dy / size.height).clamp(0.0, 1.0);
+                                      final xMm = hm.xMin + tx * (hm.xMax - hm.xMin);
+                                      final yMm = hm.yMax - ty * (hm.yMax - hm.yMin);
+                                      widget.onPointPicked!(xMm, yMm);
+                                    },
+                              child: CustomPaint(
+                                painter: _ImagePainter(_image!),
+                                child: Container(),
+                              ),
+                            ),
+                          );
+                        },
                       ),
               ),
               if (widget.loading)

@@ -128,7 +128,9 @@ class ParameterPanel extends StatelessWidget {
                 ),
               ),
               Text(
-                '${value.toStringAsFixed(2)} ${lever.unit}',
+                lever.isInteger
+                    ? '${value.round()} ${lever.unit}'.trim()
+                    : '${value.toStringAsFixed(2)} ${lever.unit}',
                 style: TextStyle(color: color, fontFeatures: const [FontFeature.tabularFigures()]),
               ),
               if (!lever.modeled)
@@ -145,9 +147,10 @@ class ParameterPanel extends StatelessWidget {
             value: value,
             min: lever.min,
             max: lever.max,
+            divisions: lever.isInteger ? (lever.max - lever.min).round() : null,
             activeColor: lever.modeled ? null : Colors.grey,
             onChanged: (v) {
-              lever.set(params, v);
+              lever.set(params, lever.isInteger ? v.roundToDouble() : v);
               onChanged();
             },
           ),

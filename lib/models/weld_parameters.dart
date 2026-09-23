@@ -41,6 +41,16 @@ class WeldParameters {
   // Weld window
   double weldDurationMs;
 
+  // Performance (doesn't affect the physics at all -- only how many cores
+  // ferrousFoam's solve step runs on). Default of 6 matches this machine's
+  // measured sweet spot: 8 physical cores (a Ryzen 7 PRO 7840U, 16 logical
+  // via SMT), and a solver this communication-heavy (global pressure
+  // solves every step) sees fading returns well before saturating even the
+  // physical core count -- see the "why not 12" reasoning captured in the
+  // ferrousFoam deck. 1 = the original always-correct serial path, no
+  // decomposePar/mpirun involved at all.
+  double parallelCores;
+
   WeldParameters({
     this.voltageV = 22.0,
     this.polarity = Polarity.dcep,
@@ -56,6 +66,7 @@ class WeldParameters {
     this.humidityPct = 50.0,
     this.atmosphericPressureKPa = 101.3,
     this.weldDurationMs = 250.0,
+    this.parallelCores = 6.0,
   });
 
   Map<String, dynamic> toJson() => {
@@ -73,6 +84,7 @@ class WeldParameters {
         'humidity_pct': humidityPct,
         'atmospheric_pressure_kpa': atmosphericPressureKPa,
         'weld_duration_ms': weldDurationMs,
+        'parallel_cores': parallelCores.round(),
       };
 }
 
@@ -89,6 +101,11 @@ class LeverSpec {
   /// derived value the user should know but that isn't itself a lever).
   final String Function(WeldParameters)? extraHint;
 
+  /// True for a lever whose value is only ever meaningful as a whole number
+  /// (currently just parallel core count) -- snaps the slider to integer
+  /// steps and displays e.g. "6" instead of "6.00".
+  final bool isInteger;
+
   const LeverSpec({
     required this.label,
     required this.unit,
@@ -98,6 +115,7 @@ class LeverSpec {
     required this.get,
     required this.set,
     this.extraHint,
+    this.isInteger = false,
   });
 }
 
@@ -218,6 +236,26 @@ final List<MapEntry<String, List<LeverSpec>>> leverGroups = [
       // solidifying before the run ends. The total simulated (and thus
       // wall-clock) time is that multiple, not this slider's raw value.
       extraHint: (p) => 'total simulated: ~${(p.weldDurationMs * 3).round()}ms (incl. ramp-down + cooldown)',
+    ),
+  ]),
+  MapEntry('Performance (doesn\'t affect the result)', [
+    LeverSpec(
+      label: 'Parallel cores',
+      unit: '',
+      min: 1,
+      max: 8,
+      modeled: true,
+      isInteger: true,
+      get: (p) => p.parallelCores,
+      set: (p, v) => p.parallelCores = v,
+      // decomposePar/mpirun only kick in above 1 -- see fluid's
+      // case_runner::run_ferrous_foam_with_snapshots. 6 is this machine's
+      // measured sweet spot (8 physical cores; a solver this
+      // communication-heavy sees fading returns before saturating even
+      // that), not an arbitrary default.
+      extraHint: (p) => p.parallelCores <= 1
+          ? 'serial -- the original single-core path'
+          : 'splits the solve across ${p.parallelCores.round()} cores (scotch decomposition)',
     ),
   ]),
 ];

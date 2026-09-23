@@ -1,6 +1,21 @@
 import 'package:flutter/material.dart';
 
+import '../models/run_progress.dart';
 import '../models/weld_parameters.dart';
+
+/// "Sep 23, 06:36" -- no `intl` dependency needed for this one call site.
+const _monthNames = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+String formatRunHistoryDate(DateTime? dt) {
+  if (dt == null) return 'unknown time';
+  final local = dt.toLocal();
+  final month = _monthNames[local.month - 1];
+  final hh = local.hour.toString().padLeft(2, '0');
+  final mm = local.minute.toString().padLeft(2, '0');
+  return '$month ${local.day}, $hh:$mm';
+}
 
 /// The "levers": grouped sliders for continuous parameters and dropdowns for
 /// categorical ones. Levers marked not-yet-modeled by ferrousFoam are shown
@@ -10,13 +25,33 @@ class ParameterPanel extends StatelessWidget {
   final WeldParameters params;
   final VoidCallback onChanged;
 
-  const ParameterPanel({super.key, required this.params, required this.onChanged});
+  /// Every weld weld_service has ever staged (see GET /runs), regardless of
+  /// how it ended -- done, still running, cleanly paused, or abandoned by a
+  /// crash -- so a run from before the app was last restarted is just as
+  /// selectable as one from a minute ago. Empty until the parent's fetch
+  /// completes; the dropdown just shows nothing to pick from meanwhile.
+  final List<RunHistoryEntry> previousWelds;
+
+  /// Called with the chosen entry; the parent is responsible for actually
+  /// fetching and displaying its result (see main.dart's _viewLastResult) --
+  /// this widget only presents the list, it has no service access itself.
+  final void Function(RunHistoryEntry) onSelectPreviousWeld;
+
+  const ParameterPanel({
+    super.key,
+    required this.params,
+    required this.onChanged,
+    this.previousWelds = const [],
+    required this.onSelectPreviousWeld,
+  });
 
   @override
   Widget build(BuildContext context) {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        _previousWeldsTile(context),
+        const SizedBox(height: 12),
         Text('Process parameters', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 8),
         _dropdownTile<Polarity>(
@@ -124,6 +159,40 @@ class ParameterPanel extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _previousWeldsTile(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          const Expanded(child: Text('Previous welds')),
+          DropdownButton<RunHistoryEntry>(
+            value: null,
+            hint: Text(previousWelds.isEmpty ? 'none yet' : 'select…'),
+            // Always null: this isn't a persistent field like the other
+            // dropdowns above (there's no "currently selected" previous
+            // weld to remember) -- it's a one-shot picker that immediately
+            // hands the choice to onSelectPreviousWeld and resets to its
+            // hint, same as choosing a command from a menu.
+            items: [
+              for (final entry in previousWelds)
+                DropdownMenuItem(
+                  value: entry,
+                  child: Text(
+                    '${formatRunHistoryDate(entry.startedAt)} — '
+                    '${entry.hasHeightmap ? entry.status.label : "${entry.status.label}, no result"}',
+                    style: entry.hasHeightmap ? null : TextStyle(color: Colors.grey.shade500),
+                  ),
+                ),
+            ],
+            onChanged: (entry) {
+              if (entry != null) onSelectPreviousWeld(entry);
+            },
+          ),
         ],
       ),
     );

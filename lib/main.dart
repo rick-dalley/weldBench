@@ -46,20 +46,6 @@ double _computeSurfaceReferenceMm(Heightmap emptyGroove) {
   return count == 0 ? emptyGroove.zMax : sum / count;
 }
 
-const _monthNames = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
-
-/// "Sep 23, 06:36" -- no `intl` dependency needed for a single call site.
-String _formatRunHistoryDate(DateTime? dt) {
-  if (dt == null) return 'unknown time';
-  final local = dt.toLocal();
-  final month = _monthNames[local.month - 1];
-  final hh = local.hour.toString().padLeft(2, '0');
-  final mm = local.minute.toString().padLeft(2, '0');
-  return '$month ${local.day}, $hh:$mm';
-}
-
 void main() {
   runApp(const WeldBenchApp());
 }
@@ -366,6 +352,12 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
   bool _pickingCrossSection = false;
   late final double _surfaceReferenceMm = _computeSurfaceReferenceMm(widget.emptyGroove);
 
+  // Backs the "Previous welds" dropdown in ParameterPanel -- every run
+  // weld_service has ever staged, regardless of how it ended (see GET
+  // /runs). Refreshed on startup and after each weld finishes, so a just-
+  // completed run shows up without needing a full app restart.
+  List<RunHistoryEntry> _runHistory = [];
+
   // weld_fast_service's live prediction -- updated on every slider change
   // (lightly debounced, see _scheduleFastPrediction), not gated by the
   // "Weld" button.
@@ -391,6 +383,7 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
     // Populate the fast-model panel immediately on startup, so it isn't
     // blank before the user's first slider touch.
     _updateFastPrediction();
+    _loadRunHistory();
 
     final pending = widget.initialRunAction;
     if (pending != null) {
@@ -480,6 +473,7 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
         _simulated = result;
         _running = false;
       });
+      _loadRunHistory();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -525,52 +519,16 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
   /// entry reuses [_viewLastResult] to display it exactly like the
   /// startup-gate dialog's "View last result" action: a single best-effort
   /// fetch of whatever heightmap that run has, landing in the normal static
-  /// 4-panel comparison view, read-only, no polling.
-  Future<void> _showRunHistory() async {
-    List<RunHistoryEntry> history;
+  /// 4-panel comparison view, read-only, no polling. Best-effort: a failure
+  /// here just leaves the dropdown showing fewer entries, not worth
+  /// interrupting the rest of the app over.
+  Future<void> _loadRunHistory() async {
     try {
-      history = await widget.weldService.fetchRunHistory();
-    } catch (e) {
+      final history = await widget.weldService.fetchRunHistory();
       if (!mounted) return;
-      setState(() => _errorText = 'Failed to fetch run history: $e');
-      return;
-    }
-    if (!mounted) return;
-
-    final selected = await showDialog<RunHistoryEntry>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Past welds'),
-        content: SizedBox(
-          width: 480,
-          child: history.isEmpty
-              ? const Text('No past welds found.')
-              : SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (final entry in history)
-                        ListTile(
-                          enabled: entry.hasHeightmap,
-                          title: Text(_formatRunHistoryDate(entry.startedAt)),
-                          subtitle: Text(
-                            entry.hasHeightmap ? entry.status.label : '${entry.status.label} — no result saved',
-                          ),
-                          onTap: entry.hasHeightmap ? () => Navigator.pop(dialogContext, entry) : null,
-                        ),
-                    ],
-                  ),
-                ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Close')),
-        ],
-      ),
-    );
-
-    if (selected != null && mounted) {
-      await _viewLastResult(selected.runId);
+      setState(() => _runHistory = history);
+    } catch (_) {
+      // leave whatever list we already had, if any.
     }
   }
 
@@ -819,16 +777,6 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
               ),
             ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
-            child: Center(
-              child: IconButton(
-                icon: const Icon(Icons.history),
-                tooltip: 'Past welds — view any earlier run, regardless of how it ended',
-                onPressed: _showRunHistory,
-              ),
-            ),
-          ),
-          Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Center(
               child: FilledButton.icon(
@@ -852,6 +800,8 @@ class _WeldBenchHomeState extends State<WeldBenchHome> with WidgetsBindingObserv
                 setState(() {});
                 _scheduleFastPrediction();
               },
+              previousWelds: _runHistory,
+              onSelectPreviousWeld: (entry) => _viewLastResult(entry.runId),
             ),
           ),
           const VerticalDivider(width: 1),

@@ -445,15 +445,32 @@ class _PointCloudPainter extends CustomPainter {
   // welded rows correctly clamp down to a narrow strip again.
   static const double _gapMaxWidthMm = 6.0;
 
+  // How much shallower than the heightmap's OVERALL minimum a row's own
+  // minimum is allowed to be and still count as "genuinely bare floor"
+  // rather than "a bead has risen here". Real, unwelded rows drift only
+  // gently (a fraction of a mm across a realistic window, from the part's
+  // own slight tilt) -- a row whose minimum sits several mm shallower than
+  // the deepest point anywhere in view is not bare floor, it's a bead that
+  // has (at least partially) filled the groove there. Without this gate,
+  // the width cap above still isn't enough: every row -- bead-covered or
+  // not -- has SOME local unevenness, so width-capped notch-finding alone
+  // still cuts a hole through solid, risen bead material on every single
+  // row of a real tack weld, not just the ones that are still genuinely
+  // open. Verified against the real welded scan (repositioned to actually
+  // show a tack bump, Y 350-430mm): bare rows sit within ~0.7mm of the
+  // window's global minimum; every bead-covered row sits at least ~2.6mm
+  // above it. 2.0mm sits cleanly between those two clusters.
+  static const double _gapDepthGateMm = 2.0;
+
   /// The raw X-range (in mm) of the row's narrow root-gap notch, isolated
-  /// from the broader V-shaped floor (or, on a welded row, the bead) around
-  /// it by looking only at points within [_gapDetectionToleranceMm] of the
-  /// row's minimum, capped to [_gapMaxWidthMm] wide (see its doc comment).
-  /// The notch is a real, physical feature of the root gap itself (present
-  /// the full length of the groove, not just where a tack weld happens to
-  /// sit), so this is expected to find something on every row of a real
-  /// scan.
-  ({double xLoMm, double xHiMm}) _detectGapXRangeMm(int yi) {
+  /// from the broader V-shaped floor around it by looking only at points
+  /// within [_gapDetectionToleranceMm] of the row's minimum, capped to
+  /// [_gapMaxWidthMm] wide (see its doc comment) -- or null if this row's
+  /// minimum isn't deep enough (see [_gapDepthGateMm]) to plausibly be the
+  /// real structural gap at all, meaning a bead has (at least partially)
+  /// filled the groove at this Y and it should render as ordinary solid
+  /// surface, not an opening.
+  ({double xLoMm, double xHiMm})? _detectGapXRangeMm(int yi, double heightmapMinZ) {
     final nx = heightmap.nx;
     var minZ = double.infinity;
     var minXi = 0;
@@ -464,6 +481,7 @@ class _PointCloudPainter extends CustomPainter {
         minXi = xi;
       }
     }
+    if (minZ - heightmapMinZ > _gapDepthGateMm) return null;
     final threshold = minZ + _gapDetectionToleranceMm;
     var loXi = minXi;
     while (loXi > 0 && heightmap.zMm[loXi - 1][yi] <= threshold) {
@@ -545,12 +563,22 @@ class _PointCloudPainter extends CustomPainter {
     );
 
     // The real scan's narrow root-gap notch, per decimated row -- null
-    // entries mean "no gap detected on this row" (shouldn't normally happen
-    // on a real scan, but guards against a degenerate/empty heightmap).
-    // Only computed when showBackingPlate is set, since this is meaningless
-    // (and wasted work) for a predicted surface.
+    // entries mean "no gap on this row at all": either a degenerate/empty
+    // heightmap, or (the common real case on a welded scan) a bead has
+    // risen enough there that this row no longer has a genuinely open
+    // structural gap to show -- see _gapDepthGateMm. Only computed when
+    // showBackingPlate is set, since this is meaningless (and wasted work)
+    // for a predicted surface.
+    double heightmapMinZ = double.infinity;
+    if (showBackingPlate) {
+      for (final row in heightmap.zMm) {
+        for (final z in row) {
+          if (z < heightmapMinZ) heightmapMinZ = z;
+        }
+      }
+    }
     final gapRangesByRow = showBackingPlate
-        ? [for (final yi in yIndices) _detectGapXRangeMm(yi)]
+        ? [for (final yi in yIndices) _detectGapXRangeMm(yi, heightmapMinZ)]
         : null;
 
     bool cellIsInGap(int xpi, int ypi) {
@@ -559,10 +587,12 @@ class _PointCloudPainter extends CustomPainter {
       final xHi = heightmap.xMm[xIndices[xpi + 1]];
       // Require BOTH bounding rows to independently agree this column
       // range is inside their own gap -- conservative, so a single noisy
-      // row doesn't punch an isolated hole in the wall.
+      // row doesn't punch an isolated hole in the wall. A row with no gap
+      // at all (bead has closed it there) means this cell isn't in a gap,
+      // full stop.
       for (final ypiToCheck in [ypi, ypi + 1]) {
         final g = gapRangesByRow[ypiToCheck];
-        if (xLo < g.xLoMm || xHi > g.xHiMm) return false;
+        if (g == null || xLo < g.xLoMm || xHi > g.xHiMm) return false;
       }
       return true;
     }

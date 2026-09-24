@@ -14,7 +14,7 @@ import 'package:weld_bench/widgets/point_cloud_view.dart';
 const _emptyDataPath =
     '/tmp/claude-1000/-home-rick-Code-physics/c7400b2b-8608-47d0-ae45-3b490f44a1d7/scratchpad/real_empty_groove_fresh.json';
 const _weldedDataPath =
-    '/tmp/claude-1000/-home-rick-Code-physics/c7400b2b-8608-47d0-ae45-3b490f44a1d7/scratchpad/real_welded_groove_fresh.json';
+    '/tmp/claude-1000/-home-rick-Code-physics/c7400b2b-8608-47d0-ae45-3b490f44a1d7/scratchpad/real_welded_groove_repositioned.json';
 
 Future<void> _renderAt(
   WidgetTester tester,
@@ -69,7 +69,7 @@ void main() {
     });
   });
 
-  testWidgets('preview: real welded scan (with tack bead), with and without the width cap', (tester) async {
+  testWidgets('preview: real welded scan, repositioned window, with the depth gate', (tester) async {
     tester.view.physicalSize = const Size(700, 720);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -80,6 +80,13 @@ void main() {
         'Welded, backing plate on',
         true,
         '/tmp/weldbench_backing_plate_welded.png',
+        dataPath: _weldedDataPath,
+      );
+      await _renderAt(
+        tester,
+        'Welded, backing plate off',
+        false,
+        '/tmp/weldbench_backing_plate_welded_off.png',
         dataPath: _weldedDataPath,
       );
     });
